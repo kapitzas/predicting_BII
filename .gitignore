@@ -1,0 +1,7 @@
+.Rproj.user
+/PREDICTS
+/data
+*.rds
+*.RProj
+*.bib
+*testing.R
