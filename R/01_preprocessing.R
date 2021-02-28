@@ -215,7 +215,7 @@ popdens <- c(
   popdens[grepl("total_2050", popdens)],
   popdens[grepl("total_2100", popdens)]
 )
-
+i <- 1
 # reproject to match mask
 pop_names <- c("pop_2000", "pop_2050", "pop_2100")
 for (i in 2:length(popdens)){

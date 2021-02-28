@@ -239,6 +239,10 @@ writeLines(c(""), logfile)
 
 # system("ps")
 # system("pkill -f R")
+landuses <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
+intensities <- c("minimal", "light", "intense")
+
+lu_int_names <- as.vector(t(outer(landuses, intensities, paste, sep="_")))[-c(4,14)]
 
 foreach(j = 1:length(inds_30sec_breaks), .packages = c("mgcv", "foreach")) %dopar% {
   
@@ -281,8 +285,28 @@ foreach(j = 1:length(inds_30sec_breaks), .packages = c("mgcv", "foreach")) %dopa
     predicted_out
   }
   predicted_out <- as.data.frame(do.call('cbind', results))
-  colnames(predicted_out) <- landuses
+  colnames(predicted_out) <- lu_int_names
   
   # Save each predicted chunk indiividually to avoid memory issues, we can load them back in and merge into map later
   saveRDS(predicted_out, file = file.path(temp_path, paste0("predicted_chunk", j, "_nona.rds")))
+}
+stopCluster(cl)
+
+# Recombine predicted chunks to one file for eaach land use type and intensity
+cl <- makeCluster(7)
+registerDoParallel(cl)
+
+logfile <- file.path(data_path, paste0("log.txt"))
+writeLines(c(""), logfile)
+
+foreach(j = 1:length(lu_int_names)) %dopar% {
+  out <- numeric()
+  lu_int <- lu_int_names[j]
+  
+  for(i in 1:500){
+    cat(paste(paste(j, i), "\n"), file = logfile, append = T)
+    predicted_chunk <- readRDS(list.files(temp_path, pattern = paste0("predicted_chunk",i, ".rds"), full.names = TRUE))
+    out <- c(out, predicted_chunk[,which(colnames(predicted_chunk) == lu_int)])
+  }
+  saveRDS(out, file.path(output_path, paste0(lu_int, "30sec", ".rds")))
 }
