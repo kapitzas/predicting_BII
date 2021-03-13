@@ -15,13 +15,15 @@ require(flutes)
 library("doParallel")
 require(mgcv)
 
-raw_path <-  file.path(path.expand("~"), "OneDrive - The University of Melbourne", "PhD - Large Files", "PhD - Raw Data")
-data_path <- file.path(".", "data")
-temp_path <- file.path(data_path, "temp")
+raw_path <-  file.path("/Volumes", "external", "OneDrive - The University of Melbourne", "PhD - Large Files", "raw data")
+processed_path <- file.path(raw_path, "Global", "processed rasters")
+temp_path <- file.path("/Volumes", "external", "c3 processing", "temp")
+
+# data_path <- file.path(".", "data")
 
 # Create temp folder
 if(!dir.exists(temp_path)){
-   dir.create(temp_path)
+  dir.create(temp_path)
 }
 
 #---------------#
@@ -29,50 +31,234 @@ if(!dir.exists(temp_path)){
 #---------------#
 
 # Global mask at ca 1km
-input <- file.path(data_path, "TM_WORLD_BORDERS_SIMPL-0", "TM_WORLD_BORDERS_SIMPL-0.3.shp")
-output <- file.path(data_path, "mask_30sec.tif")
+input <- file.path(raw_path, "Global", "TM_WORLD_BORDERS_SIMPL-0", "TM_WORLD_BORDERS_SIMPL-0.3.shp")
+output <- file.path(temp_path, "mask_30sec.tif")
 rasterize_shp(input, output, res =  0.0083, c(-180, 180, -90, 90), no_data = NA)
-subr <- raster(output)
-saveRDS(readAll(subr), file.path(data_path, "mask_30sec.rds"))
-unlink(output)
+# subr <- raster(output)
+# saveRDS(readAll(subr), file.path(data_path, "mask_30sec.rds"))
+# unlink(output)
 
 # GLobal mask at ca 0.5 degrees
-output <- file.path(data_path, "mask_30min.tif")
-rasterize_shp(un_subregions, output, res =  0.5, c(-180, 180, -90, 90), no_data = NA)
-subr <- raster(output)
-saveRDS(readAll(subr), file.path(data_path, "mask_30min.rds"))
-unlink(output)
+output <- file.path(temp_path, "mask_30min.tif")
+rasterize_shp(input, output, res =  0.5, c(-180, 180, -90, 90), no_data = NA)
+# subr <- raster(output)
+# saveRDS(readAll(subr), file.path(data_path, "mask_30min.rds"))
+# unlink(output)
 
-output <- file.path(data_path, "unsubregions_30sec.tif")
-gdaltools::rasterize_shp(un_subregions, output, res = 0.0083, c(-180, 180, -90, 90), attribute = "SUBREGION")
-subr <- raster(output)
-saveRDS(readAll(subr), file.path(data_path, "unsubregions_30sec.rds"))
-unlink(output)
+output <- file.path(temp_path, "unsubregions_30sec.tif")
+gdaltools::rasterize_shp(input, output, res = 0.0083, c(-180, 180, -90, 90), attribute = "SUBREGION")
+# subr <- raster(output)
+# saveRDS(readAll(subr), file.path(data_path, "unsubregions_30sec.rds"))
+# unlink(output)
 
-output <- file.path(data_path, "unsubregions_30min.tif")
-gdaltools::rasterize_shp(un_subregions, output, res = 0.5, c(-180, 180, -90, 90), attribute = "SUBREGION")
-subr <- raster(output)
-saveRDS(readAll(subr), file.path(data_path, "unsubregions_30min.rds"))
-unlink(output)
+output <- file.path(temp_path, "unsubregions_30min.tif")
+gdaltools::rasterize_shp(input, output, res = 0.5, c(-180, 180, -90, 90), attribute = "SUBREGION")
+# subr <- raster(output)
+# saveRDS(readAll(subr), file.path(data_path, "unsubregions_30min.rds"))
+# unlink(output)
+
+#-----------------#
+#### 2. Layers ####
+#-----------------#
+
+# 2. a Process pop dens data
+
+popdens <- list.files(file.path(raw_path, "Global", "popdens"), pattern = ".tif$", recursive = TRUE, full.name = TRUE)
+
+# Get SSP 2, SSP 7 and base year
+popdens <- c(
+  popdens[grepl("total_2000", popdens)],
+  popdens[grepl("total_2070", popdens)]
+)
+
+# reproject to match mask
+pop_names <- c("base", "ssp2", "ssp5")
+for (i in 1:length(popdens)){
+  input <- popdens[i]
+  output <- file.path(temp_path, paste0(pop_names[i], "_pop_30sec.tif"))
+  reproj_ras(input, output, crs = crs(mask_30sec), res = res(mask_30sec), method = "near", ext = extent(mask_30sec))
+  
+  
+  output <- file.path(temp_path, paste0(pop_names[i], "_pop_30min.tif"))
+  reproj_ras(input, output, crs = crs(mask_30min), res = res(mask_30min), method = "near", ext = extent(mask_30min))
+  removeTmpFiles(h=0)
+}
+
+# 2.b Making distance rasters for land use model (need these to be global)
+
+mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+
+# Roads
+roads <- st_read(paste0(file.path(raw_path, "Global", "groads-v1-global-gdb", "gROADS_v1.gdb")))
+
+rid <- matrix(c(0:7, "hwy", "pri", "sec", "tert", "loc", "trail", "priv", "unspec"), ncol = 2, nrow = 8)
+rid <- data.frame(rid)
+road_classes <- sort(unique(roads$FCLASS))
+
+for (i in road_classes[1:7]){
+  
+  print(paste0("Writing subset ", i))
+  roads_sub <- roads[which(roads$FCLASS == i),]
+  outfile <- file.path(temp_path, paste0("diro.shp"))
+  unlink(list.files(temp_path, pattern = "diro.", full.names = TRUE))
+  st_write(roads_sub, outfile)
+  
+  print(paste0("Rasterizing subset ", i))
+  infile <- file.path(temp_path, paste0("diro.shp"))
+  outfile <- file.path(temp_path, paste0("roads_temp.tif"))
+  rasterize_shp(infile, outfile, res = res(mask_30sec)[1], ext = extent(mask_30sec), no_data = NA)
+  
+  print(paste0("Proximity of subset ", i))
+  infile <- file.path(temp_path, paste0("roads_temp.tif"))
+  outfile <- file.path(temp_path, paste0("diro_", rid[i+1,2], "_30sec.tif"))
+  proximity_ras(infile, outfile)
+  
+  unlink(infile)
+  unlink(outfile)
+  rm(out)
+  raster::removeTmpFiles(h=0)
+}
+
+
+# Built-up areas
+infile <- file.path(raw_path, "Global", "Global Built up areas", "bltupa.shp")
+unlink(file.path(temp_path, "builtup_raster.tif"))
+outfile <- file.path(temp_path, "builtup_raster.tif")
+rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec))
+
+infile <- file.path(temp_path, "builtup_raster.tif")
+outfile <- file.path(temp_path, "dibu_30sec.tif")
+proximity_ras(infile, outfile)
+unlink(infile)
+
+# Lakes
+infile <- file.path(raw_path, "Global", "GSHHS data", "GSHHS_lakes_L2-L4.shp")
+unlink(file.path(temp_path, "dila_raster.tif"))
+outfile <- file.path(temp_path, "dila_raster.tif")
+rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec))
+
+infile <- file.path(temp_path, "dila_raster.tif")
+outfile <- file.path(temp_path, "dila_30sec.tif")
+proximity_ras(infile, outfile)
+unlink(infile)
+
+# Rivers
+infile <- file.path(raw_path, "Global", "GSHHS data", "WDBII_rivers_global_L2-L9.shp")
+unlink(file.path(temp_path, "diri_raster.tif"))
+outfile <- file.path(temp_path, "diri_raster.tif")
+rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec))
+
+infile <- file.path(temp_path, "diri_raster.tif")
+outfile <- file.path(temp_path, "diri_30sec.tif")
+proximity_ras(infile, outfile)
+unlink(infile)
+
+# 2. c Protected areas
+infile <- file.path(raw_path, "Global", "Global Protected Areas", "WDPA_Mar2018-shapefile-polygons.shp")
+require(rgeos)
+pa <- sf::st_read(infile)
+pa <- pa[which(pa$IUCN_CAT%in%c("Ia", "Ib", "II")),]
+pa2 <- as(pa, 'Spatial')
+pa2 <- gSimplify(pa2, tol = 0.00083)
+pa2 <- st_as_sf(pa2)
+outfile <- file.path(temp_path, "PA_IaIbII.shp")
+sf::st_write(pa2, outfile)
+pa <- st_read(outfile)
+
+infile <- file.path(temp_path, "PA_IaIbII.shp")
+outfile <- file.path(temp_path, "pa_30sec.tif")
+
+rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec), no_data = NA)
+out <- raster(outfile)
+
+out[which(!is.na(mask_30sec[]) & is.na(out[]))] <- 0
+writeRaster(out, file.path(temp_path, paste0("pa_30sec.tif")), format = "GTiff", overwrite = TRUE)
+rm(out, pa2, pa)
+unlink(infile)
+
+# 2. d ELevation
+mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+infile <-file.path(raw_path, "Global", "wc2.1_30s_elev.tif")
+
+unlink(file.path(temp_path, "srtm_30sec.tif"))
+outfile <- file.path(temp_path,  "srtm_30sec.tif")
+reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+
+# slope and roughness
+srtm <- raster(outfile)
+slope <- terrain(srtm, "slope")
+roughness <- terrain(srtm, "roughness")
+writeRaster(slope, filename = file.path(temp_path, paste0("slope_30sec.tif")), driver = "GTiff", overwrite = TRUE)
+writeRaster(roughness, filename = file.path(temp_path, paste0("roughness_30sec.tif")), driver = "GTiff", overwrite = TRUE)
+
+# 2.e Bioclim variables
+mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+biofiles <- list.files(file.path(raw_path, "Global", "wc21_30s_bio"), full.names = TRUE)
+bionames <- sort(paste0("bio", 1:19))
+
+for (i in 1:length(biofiles)){
+  infile <- biofiles[i]
+  outfile <- file.path(temp_path, paste0(bionames[i], "_30sec.tif"))
+  reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+}
+
+# 2.f soils
+
+#Full description: https://www.isric.org/explore/soilgrids/faq-soilgrids
+mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+
+# Organic Carbon Density
+infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "BLDFIE_M_sl3_1km_ll.tif")
+outfile <- file.path(temp_path,  "ocdens_30sec.tif")
+reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+
+# Available Soil Water Capacity
+infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "WWP_M_sl3_1km_ll.tif")
+outfile <- file.path(temp_path,  "wwp_30sec.tif")
+reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+
+# pH Index measured in Water Solution
+infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "PHIHOX_M_sl3_1km_ll.tif")
+outfile <- file.path(temp_path,  "phihox_30sec.tif")
+reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+
+# Bulk density fine earth
+infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "BLDFIE_M_sl3_1km_ll.tif")
+outfile <- file.path(temp_path,  "bldfie_30sec.tif")
+reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+
+# cmip data (processed in parallel in separate script)
+cmip5_path <- file.path("/Volumes", "external", "c3 processing", "gcm projections", "output quartiles")
+
+q2_list <- list.files(cmip5_path, full.names = TRUE, pattern = "q2")
+names <- sort(c(paste0("rcp45_", "bio", 1:19),
+                paste0("rcp85_", "bio", 1:19)))
+
+for (i in 1:length(q2_list)){
+  infile <- q2_list[i]
+  outfile <- file.path(temp_path,  paste0(names[i], "_30sec.tif"))
+  reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+}
 
 
 #-------------------------------#
-#### 2. Prepare land use data####
+#### 3. Prepare land use data####
 #-------------------------------#
 
-mask_30sec <- readRDS(file.path(data_path, "mask_30sec.rds"))
-mask_30min <- readRDS(file.path(data_path, "mask_30min.rds"))
+mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+mask_30min <- raster(file.path(temp_path, "mask_30min.tif"))
 
-# 2. a GLS Data
+# 3. a GLS Data
 
 # Assign CRS and write back to disk
-GLS <- raster(file.path(raw_path, "Global", "GLS_data", "land_systems.asc"))
-crs(GLS) <- "+proj=eck4 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
-writeRaster(GLS, file.path(raw_path, "Global", "GLS_data", "land_systems.tif"), driver = "GTiff", overwrite = TRUE)
+gls <- raster(file.path(raw_path, "Global", "GLS_data", "land_systems.asc"))
+crs(gls) <- "+proj=eck4 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+writeRaster(gls, file.path(raw_path, "Global", "GLS_data", "land_systems.tif"), driver = "GTiff", overwrite = TRUE)
 
 input <- file.path(raw_path, "Global", "GLS_data", "land_systems.tif")
 output <- file.path(temp_path, "gls_5min.tif")
 reproj_ras(input, output, crs = crs(mask_30sec), res = res(mask_30sec)*10, method = "near", ext = extent(mask_30sec))
+
 
 gls <- raster(output)
 gls_layers <- layerize(gls)
@@ -82,10 +268,10 @@ gls_layers <- resample(gls_layers, mask_30min, method = "ngb")
 
 gls_classes <- gsub("X", "gls", names(gls_layers))
 names(gls_layers) <- gls_classes
-saveRDS(readAll(gls_layers), file.path(data_path, "gls_30min.rds"))
-unlink(output)
 
-# 2. b Harmonized land use data
+writeRaster(readAll(gls_layers), filename=file.path(temp_path, "gls_30min.tif"), options="INTERLEAVE=BAND", overwrite=TRUE)
+
+# 3. b Harmonized land use data
 
 # load data
 harmonized <- list.files(file.path(raw_path, "Global", "harmonised land use downscaled"), pattern = ".bil", recursive = TRUE, full.name = TRUE)
@@ -93,7 +279,7 @@ harmonized <- list.files(file.path(raw_path, "Global", "harmonised land use down
 # Get rid of ice class (no existe en Aus)
 
 # harmonized <- harmonized[-which(grepl("ICE", harmonized))]
-lu_names <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
+lu_names <- c("cropland", "pasture", "primary", "secondary", "urban")
 
 # reproject harmonised to match gls and for downscaling
 for (i in 1:length(harmonized)){
@@ -102,35 +288,23 @@ for (i in 1:length(harmonized)){
   
   out <-  file.path(temp_path, paste0(lu_names[i], "_lu_30sec.tif"))
   reproj_ras(lu_path, out, crs = crs(mask_30sec), res = res(mask_30sec), method = "near", ext = extent(mask_30sec))
-  subr <- raster(out)
-  print("masking")
-  subr <- mask(subr, mask_30sec)
-  saveRDS(readAll(subr), file.path(data_path, paste0(lu_names[i], "_lu_30sec.rds")))
-  unlink(out)
   
   out <- file.path(temp_path, paste0(lu_names[i], "_lu_30min.tif"))
   reproj_ras(lu_path, out, crs = crs(mask_30min), res = res(mask_30min), method = "near", ext = extent(mask_30min))
-  subr <- raster(out)
-  subr <- mask(subr, mask_30min)
-  saveRDS(readAll(subr), file.path(data_path, paste0(lu_names[i], "_lu_30min.rds")))
-  unlink(out)
   removeTmpFiles(h=0)
 }
 
-names(gls_layers) <- gsub("X", "gls", names(gls_layers))
-saveRDS(readAll(lu_30min), file.path(".", "data", "harmonized_30min.rds"))
-saveRDS(readAll(gls_layers), file.path(".", "data", "gls_30min.rds"))
+# 3. c PREDICTS land use at 0.5 degree
 
-# 2. c PREDICTS land use at 0.5 degree
 # Make conversion table
 conversion_table <- data.frame("GLS_class" = paste0("gls", 0:29))
-conversion_table$Cropland <- c(rep("minimal", 3), rep("light", 3), rep("intense", 5), "minimal", "light", rep("intense", 2), "minimal", "light", "intense", rep(NA, 12))
-conversion_table$Pasture <- c("light", rep("intense", 2), "light", rep("intense", 2), "light", rep("intense", 4), rep("light", 3), "intense", rep("light", 3), NA, "light", "intense", rep(NA,3), "light", "intense", NA, "light", rep(NA, 2))
-conversion_table$Primary <- c(rep(NA, 18), c("minimal", "light", "intense", rep("minimal", 3)), rep(NA, 2), "minimal", rep(NA, 3))
-conversion_table$Secondary <- conversion_table$Primary
-conversion_table$Urban <- c(rep(NA, 28), "minimal", "intense")
+conversion_table$cropland <- c(rep("minimal", 3), rep("light", 3), rep("intense", 5), "minimal", "light", rep("intense", 2), "minimal", "light", "intense", rep(NA, 12))
+conversion_table$pasture <- c("light", rep("intense", 2), "light", rep("intense", 2), "light", rep("intense", 4), rep("light", 3), "intense", rep("light", 3), NA, "light", "intense", rep(NA,3), "light", "intense", NA, "light", rep(NA, 2))
+conversion_table$primary <- c(rep(NA, 18), c("minimal", "light", "intense", rep("minimal", 3)), rep(NA, 2), "minimal", rep(NA, 3))
+conversion_table$secondary <- conversion_table$primary
+conversion_table$urban <- c(rep(NA, 28), "minimal", "intense")
 
-write.csv(conversion_table, file = "./data/GLS_conversion_table.csv")
+write.csv(conversion_table, file = file.path("data", "gls_conversion_table.csv"))
 
 glc_har_restr <- list()
 intensities <- c("minimal", "light", "intense")
@@ -148,8 +322,8 @@ for (i in 1:5){
 
 names(glc_har_restr) <- landuses
 
-gls_layers <- readRDS("/Users/simon/OneDrive - The University of Melbourne/PhD/chapter3/data/gls_30min.rds")
-
+gls_layers <- stack("/Volumes/external/c3 processing/temp/gls_30min.tif")
+names(gls_layers) <- gls_classes
 
 # Sum gls classes per assigned land use and intensity level to find the fraction occupied by different intensities within each type
 
@@ -179,14 +353,10 @@ for (i in 1:5){
 nl2 <- stack(unlist(nl2))
 
 type_int_classes <- names(nl2)
-
 lu_30min <- list()
-lu_files <- list.files(data_path, pattern = "lu_30min", full.names = TRUE)
-for (i in 1:length(lu_files)){
-  lu_30min[[i]] <- readRDS(lu_files[[i]])
-}
-lu_30min <- stack(lu_30min)
+lu_30min <- stack(list.files(temp_path, pattern = "lu_30min", full.names = TRUE))
 
+final_lu30min <- list()
 for(i in 1:length(landuses)){
   r1 <- nl2[[which(grepl(landuses[i], names(nl2)))]]
   r2 <- lu_30min[[which(grepl(landuses[i], names(lu_30min)))]]
@@ -196,240 +366,58 @@ for(i in 1:length(landuses)){
 }
 
 final_lu30min <- stack(final_lu30min)
-plot(sum(final_lu30min) > 0)
 names <- names(final_lu30min)
-spplot(sum(final_lu30min))
-spplot(final_lu30min)
 final_lu30min <- final_lu30min/sum(final_lu30min) # Here we are rescaling so cells sum to 1. Sometimes the harmonized classes in a cell aren't represented by any of the gls classes. In those areas, we assume that the gls class is more precise and assume no cover of the according harmoinzed class. Unallocated areas are distributed proportionately into existing harmonized classes.
 
 names(final_lu30min) <- names
 
-saveRDS(readAll(final_lu30min), file = file.path(temp_path, "lu_predicts_30min.rds"))
+writeRaster(final_lu30min, filename=file.path(temp_path, paste0(names, "_predicts_30min.tif")), overwrite=TRUE, bylayer =TRUE)
 
-# 2. c Load pop dens data
-
-popdens <- list.files(file.path(raw_path, "Global", "popdens"), pattern = ".tif$", recursive = TRUE, full.name = TRUE)
-
-popdens <- c(
-  popdens[grepl("total_2000", popdens)],
-  popdens[grepl("total_2050", popdens)],
-  popdens[grepl("total_2100", popdens)]
-)
-i <- 1
-# reproject to match mask
-pop_names <- c("pop_2000", "pop_2050", "pop_2100")
-for (i in 2:length(popdens)){
-  input <- popdens[i]
-  output <- file.path(temp_path, paste0(pop_names[i], "pop_30sec.tif"))
-  reproj_ras(input, output, crs = crs(mask_30sec), res = res(mask_30sec), method = "near", ext = extent(mask_30sec))
-  subr <- raster(output)
-  subr <- mask(subr, mask_30sec)
-  saveRDS(readAll(subr), file.path(data_path, paste0(pop_names[i], "pop_30sec.rds")))
-  unlink(output)
-  
-  output <- file.path(temp_path, paste0(pop_names[i], "pop_30min.tif"))
-  reproj_ras(input, output, crs = crs(mask_30min), res = res(mask_30min), method = "near", ext = extent(mask_30min))
-  subr <- raster(output)
-  subr <- mask(subr, mask_30min)
-  saveRDS(readAll(subr), file.path(data_path, paste0(pop_names[i], "pop_30min.rds")))
-  unlink(output)
-  removeTmpFiles(h=0)
-}
 
 # synch NA
 
-files_30min <- list.files(data_path, pattern = "30min", full.names = TRUE)
+# 30 min
+mask_30min <- raster(file.path(temp_path, "mask_30min.tif"))
+files_30min <- list.files(temp_path, pattern = "30min", full.names = TRUE)
+names_30min <- list.files(temp_path, pattern = "30min")
+
 for(i in 1:length(files_30min)){
-  r <- readRDS(files_30min[[i]])
+  r <- raster(files_30min[[i]])
   mask_30min[is.na(r[])] <- NA
   print(i)
 }
-saveRDS(mask_30min, file.path(data_path, "mask_30min.rds"))
+
+writeRaster(mask_30min, file.path(processed_path, "mask_30min.tif"), overwrite = TRUE)
 
 for(i in 1:length(files_30min)){
-  r <- readRDS(files_30min[[i]])
+  r <- raster(files_30min[[i]])
   r[is.na(mask_30min[])] <- NA
-  saveRDS(r, files_30min[[i]])
+  writeRaster(r, file.path(processed_path, names_30min[[i]]), format = "GTiff", overwrite = TRUE)
   print(i)
 }
 
+# 30 sec 
 
-files_30sec <- list.files(data_path, pattern = "30sec", full.names = TRUE)
-for(i in 1:length(files_30sec)){
-  r <- readRDS(files_30sec[[i]])
-  mask_30sec[is.na(r[])] <- NA
-  print(i)
-}
-saveRDS(mask_30sec, file.path(data_path, "mask_30sec.rds"))
+files_30sec <- list.files(temp_path, pattern = "30sec", full.names = TRUE)
+names_30sec <- list.files(temp_path, pattern = "30sec")
+mask_30sec <- readAll(raster(file.path(temp_path, "mask_30sec.tif")))
 
 for(i in 1:length(files_30sec)){
-  r <- readRDS(files_30sec[[i]])
-  r[is.na(mask_30sec[])] <- NA
-  saveRDS(r, files_30sec[[i]])
+  r <- raster(files_30sec[[i]])
+  mask_30sec <- readAll(mask(mask_30sec, r))
+  print(i)
+  raster::removeTmpFiles(h=0)
+}
+writeRaster(mask_30sec, file.path(processed_path, "mask_30sec.tif"), format = "GTiff", overwrite = TRUE)
+
+
+mask_30sec <- raster(file.path(processed_path, "mask_30sec.tif"))
+files_30sec <- list.files(temp_path, pattern = "30sec", full.names = TRUE)
+names_30sec <- list.files(temp_path, pattern = "30sec")
+
+for(i in 1:length(files_30sec)){
+  system(paste0("gdal_calc.py -A '", file.path(processed_path, "mask_30sec.tif"),"'", " -B '", files_30sec[i],  "' --outfile='", file.path(temp_path, "temp.tif"), "'"," --calc='-99999*(A!=1) + B*(A==1)' --NoDataValue=-99999"))
   print(i)
 }
 
-# Modelling
-# make modelling dataframe
-mask_30min <- readRDS(file.path(data_path, "mask_30min.rds"))
-inds_30min <- which(!is.na(mask_30min[]))
-files_30min <- list.files(data_path, pattern = "30min", full.names = TRUE)
-files_30min <- grep(paste(c("lu_predicts", "unsubregions", "pop_2000"),collapse="|"), files_30min, value=TRUE)
-
-df_list <- list()
-for( i in 1:length(files_30min)){
-  r <- readRDS(files_30min[[i]])
-  df_list[[i]] <- r
-}
-
-
-gam_data <- as.data.frame(stack(df_list))[inds_30min,]
-landuses <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
-intensities <- c("minimal", "light", "intense")
-
-for(i in 1:length(landuses)){
-  lu_inds <- grep(paste(paste(landuses[i], intensities, sep = "_"), collapse = "|"), colnames(gam_data))
-  gam_data[landuses[i]] <- rowSums(gam_data[,lu_inds])
-  gam_data[,lu_inds] <- integerify(gam_data[,lu_inds], resolution = 1000)
-}
-
-# Combine pacific micro states into one region
-gam_data[is.na(gam_data)] <- 0
-
-gam_data$unsubregions_30min[gam_data$unsubregions_30min%in%c(57, 54, 61,29,155)] <- 99
-
-gam_data$unsubregions_30min <- as.factor(gam_data$unsubregions_30min)
-
-stopCluster(cl)
-cl <- makeCluster(5)
-registerDoParallel(cl)
-
-logfile <- file.path(data_path, paste0("gam_log.txt"))
-writeLines(c(""), logfile)
-
-mask_30min <- readRDS("./data/mask_30min.rds")
-
-results <- foreach(i = 1:5, .packages = c("mgcv")) %dopar% {
-  
-  lus <- landuses[i]
-  cat(paste(landuses[i],"\n"), file = logfile, append = T)
-  f_minimal_or_not <- as.formula(paste("minimal_or_not ~", paste(c("unsubregions_30min", paste0("s(", c("pop_2000pop_30min", lus), ")"), paste0("s(", c(lus, "pop_2000pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
-  f_light_or_intense <- as.formula(paste("light_or_intense ~", paste(c("unsubregions_30min", paste0("s(", c("pop_2000pop_30min", lus), ")"), paste0("s(", c(lus, "pop_2000pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
-  
-  # Get columns matching land use type and intensity classes
-  lu_inds <- grep(paste(paste(landuses[i], intensities, sep = "_"), collapse = "|"), colnames(gam_data))
-  
-  # Get the data 
-  if(length(lu_inds) == 2){
-    minimal_or_not <- cbind(gam_data[,lu_inds][,1], gam_data[,lu_inds][, 2])
-  }
-  
-  if(length(lu_inds) == 3){
-    minimal_or_not <- cbind(gam_data[,lu_inds][,1], rowSums(gam_data[,lu_inds][,-1]))
-  }
-  
-  cat(paste("minimal or not: ",landuses[i],"\n"), file = logfile, append = T)
-  m_minimal_or_not <- tryCatch(mgcv::gam(f_minimal_or_not, family = binomial, data = gam_data), error = function(e) NA)
-  if(is.na(m_minimal_or_not)) {cat(paste("returned NA - minimal or not: ",landuses[i],"\n"), file = logfile, append = T)}
-  if(length(lu_inds)==3){
-    light_or_intense <- as.matrix(gam_data[,lu_inds][,-1])
-    cat(paste("light or intense: ",landuses[i],"\n"), file = logfile, append = T)
-    m_light_or_intense <- tryCatch(mgcv::gam(f_light_or_intense, family = binomial, data = gam_data), error = function(e) NA)
-    if(is.na(m_light_or_intense)) {cat(paste("returned NA - light or intense: ",landuses[i],"\n"), file = logfile, append = T)}
-  } else {
-    m_light_or_intense <- NA 
-  }
-  list(m_minimal_or_not, m_light_or_intense, landuses[i])
-}
-saveRDS(results, file.path(data_path, "lumodels_2.rds"))
-
-
-
-# Predicting for validation
-result <- readRDS(file.path(data_path, "lumodels_2.rds"))
-
-
-valid_df <- list()
-for(i in 1:length(landuses)){
-  
-  # Calculate error
-  
-  m_minimal_or_not <- result[[i]][[1]]
-  m_light_or_intense <- result[[i]][[2]]
-  
-  # get predictions from first model (probability of being low)
-  minimal <- predict(m_minimal_or_not, type = "response", data = gam_data)
-  not_minimal <- 1 - minimal
-  
-  # and second model (probability of being medium *if not low*)
-  if(length(m_light_or_intense) != 1){
-    light_if_not_minimal <- predict(m_light_or_intense, type = "response", data = gam_data)
-    intense_if_not_minimal <- 1 - light_if_not_minimal
-    light <- light_if_not_minimal * not_minimal
-    intense <- intense_if_not_minimal * not_minimal
-    predicted <- cbind(minimal, light, intense)
-  } else {
-    predicted <- cbind(minimal, not_minimal)
-  }
-  valid_out <- sweep(predicted, 1, as.matrix(gam_data[landuses[i]]), FUN = "*")
-  colnames(valid_out) <- paste0(landuses[i], "_", colnames(valid_out))
-  valid_df[[i]] <- valid_out
-}
-
-summary(result[[1]][[1]])
-
-valid_df <- do.call("cbind", valid_df)
-obs_df <- as.data.frame(readRDS("/Users/simon/OneDrive - The University of Melbourne/PhD/chapter3/data/lu_predicts_30min.rds"))[inds_30min,]
-obs_df - valid_df
-
-error <- as.matrix(obs_df) - as.matrix(valid_df)
-error <- sqrt(rowMeans(error^2))
-
-test <- mask_30min
-
-test[inds_30min] <- gam_data$pop_2000pop_30min
-test[inds_30min] <- error
-rasterVis::levelplot(test)
-
-
-# Predicting high res lu intensity map
-result <- readRDS(file.path(data_path, "lumodels_2.rds"))
-str(gam_data)
-
-files_30sec <- list.files(data_path, pattern = "30sec", full.names = TRUE)[c(1,2,3,4,7,8,9,10)]
-
-data_30sec <- list()
-for( i in 1:length(files_30sec)){
-  r <- readRDS(files_30sec[[i]])
-  data_30sec[[i]] <- r
-}
-
-gam_data <- na.omit(as.data.frame(stack(data_30sec)))
-
-valid_df <- list()
-for(i in 1:length(landuses)){
-  
-  # Calculate error
-  
-  m_minimal_or_not <- result[[i]][[1]]
-  m_light_or_intense <- result[[i]][[2]]
-  
-  # get predictions from first model (probability of being low)
-  minimal <- predict(m_minimal_or_not, type = "response", data = gam_data)
-  not_minimal <- 1 - minimal
-  
-  # and second model (probability of being medium *if not low*)
-  if(length(m_light_or_intense) != 1){
-    light_if_not_minimal <- predict(m_light_or_intense, type = "response", data = gam_data)
-    intense_if_not_minimal <- 1 - light_if_not_minimal
-    light <- light_if_not_minimal * not_minimal
-    intense <- intense_if_not_minimal * not_minimal
-    predicted <- cbind(minimal, light, intense)
-  } else {
-    predicted <- cbind(minimal, not_minimal)
-  }
-  valid_out <- sweep(predicted, 1, as.matrix(gam_data[landuses[i]]), FUN = "*")
-  colnames(valid_out) <- paste0(landuses[i], "_", colnames(valid_out))
-  valid_df[[i]] <- valid_out
-}
 

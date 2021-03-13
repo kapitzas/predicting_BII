@@ -5,3 +5,4 @@
 *.RProj
 *.bib
 *testing.R
+/output

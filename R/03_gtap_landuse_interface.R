@@ -6,19 +6,21 @@ rm(list = ls())
 require(rgdal)
 require(raster)
 
-data_path <- file.path(getwd(), "data")
+data_path <- file.path(".", "data")
 temp_path <- file.path(data_path, "temp")
-out_path <- file.path(data_path, "output")
+out_path <- file.path(".", "output")
+raw_path <-  file.path("/Volumes", "external", "OneDrive - The University of Melbourne", "PhD - Large Files", "raw data")
+processed_path <- file.path(raw_path, "Global", "processed rasters")
 
 #-----------------------------------------------------#
 #### 1. Match UN countries to our GTAP aggregation ####
 #-----------------------------------------------------#
 
 # Load data
-mask_30sec <- readRDS(file.path(data_path, "mask_30sec.rds"))
+mask_30sec <- raster(file.path(processed_path, "mask_30sec.tif"))
 
 gtap_regions <- read.csv(file.path(data_path, "gtap_aggregation.csv"))
-world_borders <- readOGR(file.path(data_path, "TM_WORLD_BORDERS_SIMPL-0", "TM_WORLD_BORDERS_SIMPL-0.3.shp"))
+world_borders <- readOGR(file.path(raw_path, "Global", "TM_WORLD_BORDERS_SIMPL-0", "TM_WORLD_BORDERS_SIMPL-0.3.shp"))
 regions_table <- world_borders@data
 regions_table$ISO3 <- tolower(regions_table$ISO3)
 
@@ -83,7 +85,7 @@ world_borders@data <- regions_table
 
 # Rasterize
 writeOGR(world_borders, dsn = file.path(out_path), layer = "GTAP_aggregation_borders", driver = "ESRI Shapefile", overwrite_layer = TRUE)
-output <- file.path(data_path, "GTAP_aggregation_borders_30sec.tif")
+output <- file.path(out_path, "GTAP_aggregation_borders_30sec.tif")
 input <- file.path(out_path, "GTAP_aggregation_borders.shp")
 gdaltools::rasterize_shp(input, output, res = 0.0083, c(-180, 180, -90, 90), attribute = "GTAP_code")
 
@@ -92,4 +94,4 @@ gtap_aggregation <- raster::raster(output)
 gtap_aggregation <- mask(gtap_aggregation, mask_30sec)
 
 # Save
-saveRDS(readAll(gtap_aggregation), file.path(data_path, "gtap_aggregation_30sec.rds"))
+writeRaster(readAll(gtap_aggregation), file.path(processed_path, "gtap_aggregation_30sec.tif"))

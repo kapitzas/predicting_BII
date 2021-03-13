@@ -1,7 +1,7 @@
 
-# 1) link CGE sectors to land use type intensity classes
-#   - this probably differs between Ha's subregions, think about it
-#   - produce demand trajectories for each land use and intensity class (mean)
+# 1) Predict land use model for australia only (later for all of Ha's subregions)
+
+devtools::install_github("kapitzas/flutes")
 
 # 2) Disintegrate globaal data into Ha's subregions and run all model steps in chunks
 #   - download global data sets (from last lu study)

@@ -14,6 +14,7 @@ rm(list = ls())
 # Packages
 # devtools::install_github("kapitzas/gdaltools") # package to directly link R to rgdal
 # devtools::install_github("kapitzas/flutes") # integerify function
+
 require(devtools)
 require(WorldClimTiles)
 require(rgdal)
@@ -33,6 +34,7 @@ library("doParallel")
 raw_path <-  file.path(path.expand("~"), "OneDrive - The University of Melbourne", "PhD - Large Files", "PhD - Raw Data")
 data_path <- file.path(getwd(), "data")
 temp_path <- file.path(data_path, "temp")
+int_path <- file.path(data_path, "lu_intensity")
 
 #-----------------------#
 #### 1. Build models ####
@@ -41,24 +43,20 @@ temp_path <- file.path(data_path, "temp")
 # 1. a Create modelling dataframe
 
 # Load mask, extract non-NA indices 
-mask_30min <- readRDS(file.path(data_path, "mask_30min.rds"))
+mask_30min <- raster(file.path(processed_path, "mask_30min.tif"))
 inds_30min <- which(!is.na(mask_30min[]))
 
 
 # Load 0.5 degree data for modelling into data frame
-files_30min <- list.files(data_path, pattern = "30min", full.names = TRUE)
-files_30min <- grep(paste(c("lu_predicts", "unsubregions", "pop_2000"),collapse="|"), files_30min, value=TRUE)
-df_list <- list()
-for( i in 1:length(files_30min)){
-  r <- readRDS(files_30min[[i]])
-  df_list[[i]] <- r
-}
+files_30min <- list.files(processed_path, pattern = "30min", full.names = TRUE)
+files_30min <- grep(paste(c("predicts", "unsubregions", "base_pop"),collapse="|"), files_30min, value=TRUE)
 
-gam_data <- as.data.frame(stack(df_list))[inds_30min,]
-landuses <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
+gam_data <- as.data.frame(stack(files_30min))[inds_30min,]
+landuses <- c("cropland", "pasture", "primary", "secondary", "Urban")
 intensities <- c("minimal", "light", "intense")
-
+colnames(gam_data)
 # turn response columns (fractions of land use type and intensity classes) into integers for gam
+
 for(i in 1:length(landuses)){
   lu_inds <- grep(paste(paste(landuses[i], intensities, sep = "_"), collapse = "|"), colnames(gam_data))
   gam_data[landuses[i]] <- rowSums(gam_data[,lu_inds])
@@ -88,8 +86,8 @@ results <- foreach(i = 1:5, .packages = c("mgcv")) %dopar% {
   lus <- landuses[i] # land use classes types
   
   # Two different formulas, one for minimal or not, one for lihgt or intense.
-  f_minimal_or_not <- as.formula(paste("minimal_or_not ~", paste(c("unsubregions_30min", paste0("s(", c("pop_2000pop_30min", lus), ")"), paste0("s(", c(lus, "pop_2000pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
-  f_light_or_intense <- as.formula(paste("light_or_intense ~", paste(c("unsubregions_30min", paste0("s(", c("pop_2000pop_30min", lus), ")"), paste0("s(", c(lus, "pop_2000pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
+  f_minimal_or_not <- as.formula(paste("minimal_or_not ~", paste(c("unsubregions_30min", paste0("s(", c("base_pop_30min", lus), ")"), paste0("s(", c(lus, "base_pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
+  f_light_or_intense <- as.formula(paste("light_or_intense ~", paste(c("unsubregions_30min", paste0("s(", c("base_pop_30min", lus), ")"), paste0("s(", c(lus, "base_pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
   
   # Get columns matching land use type and intensity classes
   lu_inds <- grep(paste(paste(landuses[i], intensities, sep = "_"), collapse = "|"), colnames(gam_data))
@@ -293,13 +291,18 @@ foreach(j = 1:length(inds_30sec_breaks), .packages = c("mgcv", "foreach")) %dopa
 stopCluster(cl)
 
 # Recombine predicted chunks to one file for eaach land use type and intensity
+landuses <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
+intensities <- c("minimal", "light", "intense")
+
+lu_int_names <- as.vector(t(outer(landuses, intensities, paste, sep="_")))[-c(4,14)]
+
 cl <- makeCluster(7)
 registerDoParallel(cl)
 
 logfile <- file.path(data_path, paste0("log.txt"))
 writeLines(c(""), logfile)
-
-foreach(j = 1:length(lu_int_names)) %dopar% {
+j <- 3
+foreach(j = 1:length(lu_int_names)) %do% {
   out <- numeric()
   lu_int <- lu_int_names[j]
   
@@ -308,5 +311,7 @@ foreach(j = 1:length(lu_int_names)) %dopar% {
     predicted_chunk <- readRDS(list.files(temp_path, pattern = paste0("predicted_chunk",i, ".rds"), full.names = TRUE))
     out <- c(out, predicted_chunk[,which(colnames(predicted_chunk) == lu_int)])
   }
-  saveRDS(out, file.path(output_path, paste0(lu_int, "30sec", ".rds")))
+  saveRDS(out, file.path(out_path, paste0(lu_int, "_30sec", ".rds")))
 }
+
+stopCluster(cl)
