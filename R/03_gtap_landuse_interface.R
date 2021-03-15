@@ -17,7 +17,7 @@ processed_path <- file.path(raw_path, "Global", "processed rasters")
 #-----------------------------------------------------#
 
 # Load data
-mask_30sec <- raster(file.path(processed_path, "mask_30sec.tif"))
+mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
 
 gtap_regions <- read.csv(file.path(data_path, "gtap_aggregation.csv"))
 world_borders <- readOGR(file.path(raw_path, "Global", "TM_WORLD_BORDERS_SIMPL-0", "TM_WORLD_BORDERS_SIMPL-0.3.shp"))
@@ -85,13 +85,13 @@ world_borders@data <- regions_table
 
 # Rasterize
 writeOGR(world_borders, dsn = file.path(out_path), layer = "GTAP_aggregation_borders", driver = "ESRI Shapefile", overwrite_layer = TRUE)
-output <- file.path(out_path, "GTAP_aggregation_borders_30sec.tif")
+output <- file.path(out_path, "GTAP_aggregation_borders_5min.tif")
 input <- file.path(out_path, "GTAP_aggregation_borders.shp")
-gdaltools::rasterize_shp(input, output, res = 0.0083, c(-180, 180, -90, 90), attribute = "GTAP_code")
+gdaltools::rasterize_shp(input, output, res = 0.083, c(-180, 180, -90, 90), attribute = "GTAP_code")
 
 # Mask
 gtap_aggregation <- raster::raster(output)
-gtap_aggregation <- mask(gtap_aggregation, mask_30sec)
+gtap_aggregation <- mask(gtap_aggregation, mask_5min)
 
 # Save
-writeRaster(readAll(gtap_aggregation), file.path(processed_path, "gtap_aggregation_30sec.tif"))
+writeRaster(readAll(gtap_aggregation), file.path(processed_path, "gtap_aggregation_5min.tif"))

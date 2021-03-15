@@ -32,7 +32,7 @@ library("doParallel")
 # Folders
 # setwd("/home/student.unimelb.edu.au/kapitzas/ch3") only on boab
 raw_path <-  file.path(path.expand("~"), "OneDrive - The University of Melbourne", "PhD - Large Files", "PhD - Raw Data")
-data_path <- file.path(getwd(), "data")
+data_path <- file.path(".", "data")
 temp_path <- file.path(data_path, "temp")
 int_path <- file.path(data_path, "lu_intensity")
 

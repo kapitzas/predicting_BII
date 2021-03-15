@@ -32,34 +32,25 @@ if(!dir.exists(temp_path)){
 
 # Global mask at ca 1km
 input <- file.path(raw_path, "Global", "TM_WORLD_BORDERS_SIMPL-0", "TM_WORLD_BORDERS_SIMPL-0.3.shp")
-output <- file.path(temp_path, "mask_30sec.tif")
-rasterize_shp(input, output, res =  0.0083, c(-180, 180, -90, 90), no_data = NA)
-# subr <- raster(output)
-# saveRDS(readAll(subr), file.path(data_path, "mask_30sec.rds"))
-# unlink(output)
+output <- file.path(temp_path, "mask_5min.tif")
+rasterize_shp(input, output, res =  0.083, c(-180, 180, -90, 90), no_data = -99999)
 
 # GLobal mask at ca 0.5 degrees
 output <- file.path(temp_path, "mask_30min.tif")
-rasterize_shp(input, output, res =  0.5, c(-180, 180, -90, 90), no_data = NA)
-# subr <- raster(output)
-# saveRDS(readAll(subr), file.path(data_path, "mask_30min.rds"))
-# unlink(output)
+rasterize_shp(input, output, res =  0.5, c(-180, 180, -90, 90), no_data = -99999)
 
-output <- file.path(temp_path, "unsubregions_30sec.tif")
-gdaltools::rasterize_shp(input, output, res = 0.0083, c(-180, 180, -90, 90), attribute = "SUBREGION")
-# subr <- raster(output)
-# saveRDS(readAll(subr), file.path(data_path, "unsubregions_30sec.rds"))
-# unlink(output)
+output <- file.path(temp_path, "unsubregions_5min.tif")
+gdaltools::rasterize_shp(input, output, res = 0.083, c(-180, 180, -90, 90), attribute = "SUBREGION")
 
 output <- file.path(temp_path, "unsubregions_30min.tif")
 gdaltools::rasterize_shp(input, output, res = 0.5, c(-180, 180, -90, 90), attribute = "SUBREGION")
-# subr <- raster(output)
-# saveRDS(readAll(subr), file.path(data_path, "unsubregions_30min.rds"))
-# unlink(output)
 
 #-----------------#
 #### 2. Layers ####
 #-----------------#
+
+mask_5min <- raster(file.path(temp_path, "mask_5min.tif"))
+mask_30min <- raster(file.path(temp_path, "mask_30min.tif"))
 
 # 2. a Process pop dens data
 
@@ -75,8 +66,8 @@ popdens <- c(
 pop_names <- c("base", "ssp2", "ssp5")
 for (i in 1:length(popdens)){
   input <- popdens[i]
-  output <- file.path(temp_path, paste0(pop_names[i], "_pop_30sec.tif"))
-  reproj_ras(input, output, crs = crs(mask_30sec), res = res(mask_30sec), method = "near", ext = extent(mask_30sec))
+  output <- file.path(temp_path, paste0(pop_names[i], "_pop_5min.tif"))
+  reproj_ras(input, output, crs = crs(mask_5min), res = res(mask_5min), method = "near", ext = extent(mask_5min))
   
   
   output <- file.path(temp_path, paste0(pop_names[i], "_pop_30min.tif"))
@@ -86,7 +77,8 @@ for (i in 1:length(popdens)){
 
 # 2.b Making distance rasters for land use model (need these to be global)
 
-mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+mask_5min <- raster(file.path(temp_path, "mask_5min.tif"))
+mask_30min <- raster(file.path(temp_path, "mask_30min.tif"))
 
 # Roads
 roads <- st_read(paste0(file.path(raw_path, "Global", "groads-v1-global-gdb", "gROADS_v1.gdb")))
@@ -106,11 +98,11 @@ for (i in road_classes[1:7]){
   print(paste0("Rasterizing subset ", i))
   infile <- file.path(temp_path, paste0("diro.shp"))
   outfile <- file.path(temp_path, paste0("roads_temp.tif"))
-  rasterize_shp(infile, outfile, res = res(mask_30sec)[1], ext = extent(mask_30sec), no_data = NA)
+  rasterize_shp(infile, outfile, res = res(mask_5min)[1], ext = extent(mask_5min), no_data = NA)
   
   print(paste0("Proximity of subset ", i))
   infile <- file.path(temp_path, paste0("roads_temp.tif"))
-  outfile <- file.path(temp_path, paste0("diro_", rid[i+1,2], "_30sec.tif"))
+  outfile <- file.path(temp_path, paste0("diro_", rid[i+1,2], "_5min.tif"))
   proximity_ras(infile, outfile)
   
   unlink(infile)
@@ -124,10 +116,10 @@ for (i in road_classes[1:7]){
 infile <- file.path(raw_path, "Global", "Global Built up areas", "bltupa.shp")
 unlink(file.path(temp_path, "builtup_raster.tif"))
 outfile <- file.path(temp_path, "builtup_raster.tif")
-rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec))
+rasterize_shp(infile, outfile, res = res(mask_5min), ext = extent(mask_5min))
 
 infile <- file.path(temp_path, "builtup_raster.tif")
-outfile <- file.path(temp_path, "dibu_30sec.tif")
+outfile <- file.path(temp_path, "dibu_5min.tif")
 proximity_ras(infile, outfile)
 unlink(infile)
 
@@ -135,10 +127,10 @@ unlink(infile)
 infile <- file.path(raw_path, "Global", "GSHHS data", "GSHHS_lakes_L2-L4.shp")
 unlink(file.path(temp_path, "dila_raster.tif"))
 outfile <- file.path(temp_path, "dila_raster.tif")
-rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec))
+rasterize_shp(infile, outfile, res = res(mask_5min), ext = extent(mask_5min))
 
 infile <- file.path(temp_path, "dila_raster.tif")
-outfile <- file.path(temp_path, "dila_30sec.tif")
+outfile <- file.path(temp_path, "dila_5min.tif")
 proximity_ras(infile, outfile)
 unlink(infile)
 
@@ -146,10 +138,10 @@ unlink(infile)
 infile <- file.path(raw_path, "Global", "GSHHS data", "WDBII_rivers_global_L2-L9.shp")
 unlink(file.path(temp_path, "diri_raster.tif"))
 outfile <- file.path(temp_path, "diri_raster.tif")
-rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec))
+rasterize_shp(infile, outfile, res = res(mask_5min), ext = extent(mask_5min))
 
 infile <- file.path(temp_path, "diri_raster.tif")
-outfile <- file.path(temp_path, "diri_30sec.tif")
+outfile <- file.path(temp_path, "diri_5min.tif")
 proximity_ras(infile, outfile)
 unlink(infile)
 
@@ -166,69 +158,69 @@ sf::st_write(pa2, outfile)
 pa <- st_read(outfile)
 
 infile <- file.path(temp_path, "PA_IaIbII.shp")
-outfile <- file.path(temp_path, "pa_30sec.tif")
+outfile <- file.path(temp_path, "pa_5min.tif")
 
-rasterize_shp(infile, outfile, res = res(mask_30sec), ext = extent(mask_30sec), no_data = NA)
+rasterize_shp(infile, outfile, res = res(mask_5min), ext = extent(mask_5min), no_data = NA)
 out <- raster(outfile)
 
-out[which(!is.na(mask_30sec[]) & is.na(out[]))] <- 0
-writeRaster(out, file.path(temp_path, paste0("pa_30sec.tif")), format = "GTiff", overwrite = TRUE)
+out[which(!is.na(mask_5min[]) & is.na(out[]))] <- 0
+writeRaster(out, file.path(temp_path, paste0("pa_5min.tif")), format = "GTiff", overwrite = TRUE)
 rm(out, pa2, pa)
 unlink(infile)
 
 # 2. d ELevation
-mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+mask_5min <- raster(file.path(temp_path, "mask_5min.tif"))
 infile <-file.path(raw_path, "Global", "wc2.1_30s_elev.tif")
 
-unlink(file.path(temp_path, "srtm_30sec.tif"))
-outfile <- file.path(temp_path,  "srtm_30sec.tif")
-reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+unlink(file.path(temp_path, "srtm_5min.tif"))
+outfile <- file.path(temp_path,  "srtm_5min.tif")
+reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 
 # slope and roughness
 srtm <- raster(outfile)
 slope <- terrain(srtm, "slope")
 roughness <- terrain(srtm, "roughness")
-writeRaster(slope, filename = file.path(temp_path, paste0("slope_30sec.tif")), driver = "GTiff", overwrite = TRUE)
-writeRaster(roughness, filename = file.path(temp_path, paste0("roughness_30sec.tif")), driver = "GTiff", overwrite = TRUE)
+writeRaster(slope, filename = file.path(temp_path, paste0("slope_5min.tif")), driver = "GTiff", overwrite = TRUE)
+writeRaster(roughness, filename = file.path(temp_path, paste0("roughness_5min.tif")), driver = "GTiff", overwrite = TRUE)
 
 # 2.e Bioclim variables
-mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
-biofiles <- list.files(file.path(raw_path, "Global", "wc21_30s_bio"), full.names = TRUE)
+mask_5min <- raster(file.path(temp_path, "mask_5min.tif"))
+biofiles <- list.files(file.path(raw_path, "Global", "worldclim", "wc2"), full.names = TRUE)
 bionames <- sort(paste0("bio", 1:19))
 
 for (i in 1:length(biofiles)){
   infile <- biofiles[i]
-  outfile <- file.path(temp_path, paste0(bionames[i], "_30sec.tif"))
-  reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+  outfile <- file.path(temp_path, paste0(bionames[i], "_5min.tif"))
+  reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 }
 
 # 2.f soils
 
 #Full description: https://www.isric.org/explore/soilgrids/faq-soilgrids
-mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+mask_5min <- raster(file.path(temp_path, "mask_5min.tif"))
 
 # Organic Carbon Density
 infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "BLDFIE_M_sl3_1km_ll.tif")
-outfile <- file.path(temp_path,  "ocdens_30sec.tif")
-reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+outfile <- file.path(temp_path,  "ocdens_5min.tif")
+reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 
 # Available Soil Water Capacity
 infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "WWP_M_sl3_1km_ll.tif")
-outfile <- file.path(temp_path,  "wwp_30sec.tif")
-reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+outfile <- file.path(temp_path,  "wwp_5min.tif")
+reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 
 # pH Index measured in Water Solution
 infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "PHIHOX_M_sl3_1km_ll.tif")
-outfile <- file.path(temp_path,  "phihox_30sec.tif")
-reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+outfile <- file.path(temp_path,  "phihox_5min.tif")
+reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 
 # Bulk density fine earth
 infile <- file.path(raw_path, "Global", "soil_data", "ISRIC", "BLDFIE_M_sl3_1km_ll.tif")
-outfile <- file.path(temp_path,  "bldfie_30sec.tif")
-reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+outfile <- file.path(temp_path,  "bldfie_5min.tif")
+reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 
 # cmip data (processed in parallel in separate script)
-cmip5_path <- file.path("/Volumes", "external", "c3 processing", "gcm projections", "output quartiles")
+cmip5_path <- file.path("/Volumes", "external", "c3 processing", "gcm projections", "output")
 
 q2_list <- list.files(cmip5_path, full.names = TRUE, pattern = "q2")
 names <- sort(c(paste0("rcp45_", "bio", 1:19),
@@ -236,8 +228,8 @@ names <- sort(c(paste0("rcp45_", "bio", 1:19),
 
 for (i in 1:length(q2_list)){
   infile <- q2_list[i]
-  outfile <- file.path(temp_path,  paste0(names[i], "_30sec.tif"))
-  reproj_ras(infile, outfile, crs = crs(mask_30sec), ext = extent(mask_30sec), res = res(mask_30sec), method = "bilinear")
+  outfile <- file.path(temp_path,  paste0(names[i], "_5min.tif"))
+  reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 }
 
 
@@ -245,7 +237,7 @@ for (i in 1:length(q2_list)){
 #### 3. Prepare land use data####
 #-------------------------------#
 
-mask_30sec <- raster(file.path(temp_path, "mask_30sec.tif"))
+mask_5min <- raster(file.path(temp_path, "mask_5min.tif"))
 mask_30min <- raster(file.path(temp_path, "mask_30min.tif"))
 
 # 3. a GLS Data
@@ -257,8 +249,7 @@ writeRaster(gls, file.path(raw_path, "Global", "GLS_data", "land_systems.tif"), 
 
 input <- file.path(raw_path, "Global", "GLS_data", "land_systems.tif")
 output <- file.path(temp_path, "gls_5min.tif")
-reproj_ras(input, output, crs = crs(mask_30sec), res = res(mask_30sec)*10, method = "near", ext = extent(mask_30sec))
-
+reproj_ras(input, output, crs = crs(mask_5min), res = res(mask_5min), method = "near", ext = extent(mask_5min))
 
 gls <- raster(output)
 gls_layers <- layerize(gls)
@@ -286,8 +277,8 @@ for (i in 1:length(harmonized)){
   
   lu_path <- harmonized[i]
   
-  out <-  file.path(temp_path, paste0(lu_names[i], "_lu_30sec.tif"))
-  reproj_ras(lu_path, out, crs = crs(mask_30sec), res = res(mask_30sec), method = "near", ext = extent(mask_30sec))
+  out <-  file.path(temp_path, paste0(lu_names[i], "_lu_5min.tif"))
+  reproj_ras(lu_path, out, crs = crs(mask_5min), res = res(mask_5min), method = "near", ext = extent(mask_5min))
   
   out <- file.path(temp_path, paste0(lu_names[i], "_lu_30min.tif"))
   reproj_ras(lu_path, out, crs = crs(mask_30min), res = res(mask_30min), method = "near", ext = extent(mask_30min))
@@ -396,28 +387,31 @@ for(i in 1:length(files_30min)){
   print(i)
 }
 
-# 30 sec 
+# 5 min
+files_5min <- list.files(temp_path, pattern = "5min", full.names = TRUE)
+names_5min <- list.files(temp_path, pattern = "5min")
+mask_5min <- readAll(raster(file.path(temp_path, "mask_5min.tif")))
 
-files_30sec <- list.files(temp_path, pattern = "30sec", full.names = TRUE)
-names_30sec <- list.files(temp_path, pattern = "30sec")
-mask_30sec <- readAll(raster(file.path(temp_path, "mask_30sec.tif")))
-
-for(i in 1:length(files_30sec)){
-  r <- raster(files_30sec[[i]])
-  mask_30sec <- readAll(mask(mask_30sec, r))
-  print(i)
-  raster::removeTmpFiles(h=0)
-}
-writeRaster(mask_30sec, file.path(processed_path, "mask_30sec.tif"), format = "GTiff", overwrite = TRUE)
-
-
-mask_30sec <- raster(file.path(processed_path, "mask_30sec.tif"))
-files_30sec <- list.files(temp_path, pattern = "30sec", full.names = TRUE)
-names_30sec <- list.files(temp_path, pattern = "30sec")
-
-for(i in 1:length(files_30sec)){
-  system(paste0("gdal_calc.py -A '", file.path(processed_path, "mask_30sec.tif"),"'", " -B '", files_30sec[i],  "' --outfile='", file.path(temp_path, "temp.tif"), "'"," --calc='-99999*(A!=1) + B*(A==1)' --NoDataValue=-99999"))
+for(i in 1:length(files_5min)){
+  r <- raster(files_5min[[i]])
+  mask_5min <- mask(mask_5min, r, progress = "text")
+  tempfiles <- list.files(file.path(tempdir(), "raster"), full.names = TRUE)
+  unlink(tempfiles[-which(grepl(substr(mask_5min@file@name, 100, nchar(mask_5min@file@name)-4), tempfiles))])
   print(i)
 }
 
+writeRaster(readAll(mask_5min), file.path(processed_path, "mask_5min.tif"), format = "GTiff", overwrite = TRUE)
 
+mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
+
+files_5min <- list.files(temp_path, pattern = "5min", full.names = TRUE)
+files_5min <- files_5min[-grepl("mask", files_5min)]
+names_5min <- list.files(temp_path, pattern = "5min")
+names_5min <- names_5min[-grepl("mask", names_5min)]
+
+for(i in 1:length(files_5min)){
+  print(i)
+  r <- raster(files_5min[i])
+  r <- mask(r, mask_5min)
+  writeRaster(r, file.path(processed_path, names_5min[i]), format = "GTiff", overwrite = TRUE)
+}
