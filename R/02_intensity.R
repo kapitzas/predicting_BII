@@ -197,34 +197,36 @@ spplot(test)
 # 3. a Make prediction data frame with high res data
 
 # Load 0.5 arcmin mask and extract indices
-mask_30sec <- readRDS(file.path(data_path, "mask_30sec.rds"))
-inds_30sec <- which(!is.na(getValues(mask_30sec)))
+mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
+inds_5min <- which(!is.na(getValues(mask_5min)))
 
 # Since there are 2E10^8 data points, we have to predict the models in digestable chunks to avoid memory issues. 
 # Create chunks
-inds_30sec_breaks <- chunk(inds_30sec, n.chunks = 500)
+length(inds_5min)
+inds_5min_breaks <- chunk(inds_5min, n.chunks = 10)
 
 # Load fine res data
-files_30sec <- list.files(data_path, pattern = "30sec", full.names = TRUE)
-files_30sec <- files_30sec[which(grepl(paste(c("lu", "2000pop", "unsubregions_30sec") , collapse = "|"), files_30sec))]
+files_5min <- list.files(processed_path, pattern = "5min", full.names = TRUE)
+files_5min <- files_5min[which(grepl(paste(c("lu", "base_pop", "unsubregions") , collapse = "|"), files_5min))]
 
 # Write very large files into the smaller chunks so we can read them in from disk step by step
-for(i in 1:length(files_30sec)){
-  r <- readRDS(files_30sec[[i]])
+
+for(i in 1:length(files_5min)){
+  r <- raster(files_5min[[i]])
   nm <- names(r)
-  for(j in 1:length(inds_30sec_breaks)){
-    saveRDS(r[inds_30sec_breaks[[j]]], file = file.path(temp_path, paste0(nm, "_chunk", j, "_nona.rds")))
+  for(j in 1:length(inds_5min_breaks)){
+    saveRDS(r[inds_5min_breaks[[j]]], file = file.path(temp_path, paste0(nm, "_chunk", j, "_nona.rds")))
     print(paste(i, j))
   }
   rm(r)
   removeTmpFiles(h = 0)
 }
 
-landuses <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
+landuses <- c("cropland", "pasture", "primary", "secondary", "urban")
 intensities <- c("minimal", "light", "intense")
 
 # Load models
-result <- readRDS(file.path(data_path, "lumodels_2.rds"))
+result <- readRDS(file.path(data_path, "lumodels.rds"))
 
 # 3. b Predict, processing chunks on parallel cores
 
@@ -237,26 +239,24 @@ writeLines(c(""), logfile)
 
 # system("ps")
 # system("pkill -f R")
-landuses <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
-intensities <- c("minimal", "light", "intense")
 
 lu_int_names <- as.vector(t(outer(landuses, intensities, paste, sep="_")))[-c(4,14)]
 
-foreach(j = 1:length(inds_30sec_breaks), .packages = c("mgcv", "foreach")) %dopar% {
-  
-  cat(paste("chunk", j,"\n"), file = logfile, append = T)
+foreach(j = 1:length(inds_5min_breaks), .packages = c("mgcv", "foreach")) %dopar% {
   
   # Load covariates of current chunk into data frame
   gam_data <- lapply(list.files(temp_path, pattern = paste0("chunk", j, "_nona.rds"), full.names = TRUE), FUN = function(x) {readRDS(x)})
   gam_data <- as.data.frame(do.call("cbind", gam_data))
-  colnames(gam_data) <- c("Cropland", "Pasture", "pop_2000pop_30min", "Primary", "Secondary", "unsubregions_30min", "Urban")
-  chunk_inds <- inds_30sec_breaks[[j]]
+  colnames(gam_data) <- c("base_pop_30min", "cropland", "pasture", "primary", "secondary", "unsubregions_30min", "urban")
+  chunk_inds <- inds_5min_breaks[[j]]
+  
+  gam_data$unsubregions_30min[gam_data$unsubregions_30min%in%c(57, 54, 61,29,155)] <- 99
   gam_data$unsubregions_30min <- as.factor(gam_data$unsubregions_30min)
   
   # Predict the models (as in validation)
   results <- foreach(i = 1:5, .packages = c("mgcv")) %do% {
     
-    cat(paste(landuses[i], "\n"), file = logfile, append = T)
+    cat(paste("chunk", j," ", landuses[i], "\n"), file = logfile, append = T)
     
     # Load estimated model objects
     m_minimal_or_not <- result[[i]][[1]]
@@ -286,32 +286,27 @@ foreach(j = 1:length(inds_30sec_breaks), .packages = c("mgcv", "foreach")) %dopa
   colnames(predicted_out) <- lu_int_names
   
   # Save each predicted chunk indiividually to avoid memory issues, we can load them back in and merge into map later
-  saveRDS(predicted_out, file = file.path(temp_path, paste0("predicted_chunk", j, "_nona.rds")))
+  saveRDS(predicted_out, file = file.path(out_path, paste0("predicted_chunk", j, "_nona.rds")))
 }
+
 stopCluster(cl)
-
-# Recombine predicted chunks to one file for eaach land use type and intensity
-landuses <- c("Cropland", "Pasture", "Primary", "Secondary", "Urban")
-intensities <- c("minimal", "light", "intense")
-
-lu_int_names <- as.vector(t(outer(landuses, intensities, paste, sep="_")))[-c(4,14)]
 
 cl <- makeCluster(7)
 registerDoParallel(cl)
-
+j <- i <- 1
 logfile <- file.path(data_path, paste0("log.txt"))
 writeLines(c(""), logfile)
-j <- 3
+
 foreach(j = 1:length(lu_int_names)) %do% {
   out <- numeric()
   lu_int <- lu_int_names[j]
   
-  for(i in 1:500){
+  for(i in 1:10){
     cat(paste(paste(j, i), "\n"), file = logfile, append = T)
-    predicted_chunk <- readRDS(list.files(temp_path, pattern = paste0("predicted_chunk",i, ".rds"), full.names = TRUE))
+    predicted_chunk <- readRDS(list.files(out_path, pattern = paste0("predicted_chunk",i, "_nona.rds"), full.names = TRUE))
     out <- c(out, predicted_chunk[,which(colnames(predicted_chunk) == lu_int)])
   }
-  saveRDS(out, file.path(out_path, paste0(lu_int, "_30sec", ".rds")))
+  saveRDS(out, file.path(out_path, paste0(lu_int, "_5min", ".rds")))
 }
 
 stopCluster(cl)

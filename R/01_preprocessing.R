@@ -14,10 +14,13 @@ require(sf)
 require(flutes)
 library("doParallel")
 require(mgcv)
+require(tidyverse)
 
 raw_path <-  file.path("/Volumes", "external", "OneDrive - The University of Melbourne", "PhD - Large Files", "raw data")
 processed_path <- file.path(raw_path, "Global", "processed rasters")
 temp_path <- file.path("/Volumes", "external", "c3 processing", "temp")
+data_path <- file.path(".", "data")
+out_path <- file.path(".", "output")
 
 # data_path <- file.path(".", "data")
 
@@ -59,7 +62,7 @@ popdens <- list.files(file.path(raw_path, "Global", "popdens"), pattern = ".tif$
 # Get SSP 2, SSP 7 and base year
 popdens <- c(
   popdens[grepl("total_2000", popdens)],
-  popdens[grepl("total_2070", popdens)]
+  popdens[grepl("total_2100", popdens)]
 )
 
 # reproject to match mask
@@ -147,7 +150,7 @@ unlink(infile)
 
 # 2. c Protected areas
 infile <- file.path(raw_path, "Global", "Global Protected Areas", "WDPA_Mar2018-shapefile-polygons.shp")
-require(rgeos)
+
 pa <- sf::st_read(infile)
 pa <- pa[which(pa$IUCN_CAT%in%c("Ia", "Ib", "II")),]
 pa2 <- as(pa, 'Spatial')
@@ -222,7 +225,7 @@ reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res =
 # cmip data (processed in parallel in separate script)
 cmip5_path <- file.path("/Volumes", "external", "c3 processing", "gcm projections", "output")
 
-q2_list <- list.files(cmip5_path, full.names = TRUE, pattern = "q2")
+q2_list <- sort(list.files(cmip5_path, full.names = TRUE, pattern = "q2"))
 names <- sort(c(paste0("rcp45_", "bio", 1:19),
                 paste0("rcp85_", "bio", 1:19)))
 
@@ -231,7 +234,6 @@ for (i in 1:length(q2_list)){
   outfile <- file.path(temp_path,  paste0(names[i], "_5min.tif"))
   reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 }
-
 
 #-------------------------------#
 #### 3. Prepare land use data####
@@ -399,15 +401,15 @@ for(i in 1:length(files_5min)){
   unlink(tempfiles[-which(grepl(substr(mask_5min@file@name, 100, nchar(mask_5min@file@name)-4), tempfiles))])
   print(i)
 }
-
+plot(mask_5min)
 writeRaster(readAll(mask_5min), file.path(processed_path, "mask_5min.tif"), format = "GTiff", overwrite = TRUE)
 
 mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
 
 files_5min <- list.files(temp_path, pattern = "5min", full.names = TRUE)
-files_5min <- files_5min[-grepl("mask", files_5min)]
+files_5min <- files_5min[-which(grepl("mask", files_5min))]
 names_5min <- list.files(temp_path, pattern = "5min")
-names_5min <- names_5min[-grepl("mask", names_5min)]
+names_5min <- names_5min[-which(grepl("mask", names_5min))]
 
 for(i in 1:length(files_5min)){
   print(i)
@@ -415,3 +417,60 @@ for(i in 1:length(files_5min)){
   r <- mask(r, mask_5min)
   writeRaster(r, file.path(processed_path, names_5min[i]), format = "GTiff", overwrite = TRUE)
 }
+
+# 1. e extract how many cells changed from 0 to containing a land use (this is the data in Table 4)
+lu_files <- list.files(file.path(raw_path, "Global", "LUHa_u2t1.v1"), recursive = TRUE, full.names = TRUE)
+lu_files <- lu_files[grep(pattern = paste(1990:2005, collapse = "|"), lu_files)]
+lu_files <- lu_files[grep(pattern = paste(c("gcrop", "gothr", "gpast", "gsecd", "gurbn"), collapse = "|"), lu_files)]
+lu <- raster(lu_files[[1]])
+gtap_aggregation <- raster(file.path(processed_path, "gtap_aggregation_5min.tif"))
+crs(lu) <- crs(mask_5min)
+mask_05degree <- projectRaster(mask_5min, lu, method = "ngb")
+gtap_aggregation_05degree <- projectRaster(gtap_aggregation, mask_05degree, method = "ngb")
+yrs <- 1990:2005
+gtap_regions <- read.csv(file.path(data_path, "GTAP_regions.csv"))
+gtap_regions <- distinct(gtap_regions[,c(3,4)])
+lu_obs_yr <- list()
+for(i in 1:length(yrs)){
+  print(i)
+  lu <- stack(lu_files[grep(pattern = yrs[i], lu_files)])
+  lu_obs <- list()
+  for(j in gtap_regions$GTAP_code){
+    inds <- which(gtap_aggregation_05degree[]==j)
+    lu_obs[[j]] <- as.data.frame(lu)[inds,]
+    names(lu_obs[[j]]) <- c("cropland", "primary", "pasture", "secondary", "urban")
+  }
+  lu_obs_yr[[i]] <- lu_obs
+}
+i <- j <- 1
+lu_obs_final <- list()
+for(j in 1:30){
+  lu_obs <- list()
+  for(i in 1:16){
+    lu_obs[[i]]  <- lu_obs_yr[[i]][[j]]
+  }
+  lu_obs_final[[j]] <- lu_obs
+}
+
+# lu_obs_yr: each element contains a list which in 
+ch_matrices <- list()
+for(j in 1:length(lu_obs_final)){
+  
+  lu_obs <- lu_obs_final[[j]]
+  
+  n <- nrow(lu_obs[[1]])
+  ch_ma <- matrix(NA, nrow = 15, ncol = 5)
+  
+  for(i in 2:16){
+    for(k in 1:5){
+      ch_ma[i-1, k] <- length(lu_obs[[i-1]][which(lu_obs[[i-1]][,k] == 0 & lu_obs[[i]][,k] != 0),k])/n * 100
+    }
+  ch_matrices[[j]] <- ch_ma
+  }
+}
+l <- do.call("rbind", lapply(ch_matrices, FUN = function(x) colMeans(x)))
+l <- cbind(gtap_regions$GTAP_code, l)
+colnames(l) <- c("GTAP_code", "cropland", "pasture", "primary", "secondary","urban")
+
+saveRDS(l, file = file.path("output", "lu_newestablishment.rds"))
+

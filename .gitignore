@@ -6,3 +6,5 @@
 *.bib
 *testing.R
 /output
+/BII_tutorial-1.0.0
+/temp
