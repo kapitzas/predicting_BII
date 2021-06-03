@@ -27,13 +27,14 @@ require(mgcv)
 library(BBmisc)
 require(data.table)
 library("doParallel")
-
+require(flutes)
 
 # Folders
 # setwd("/home/student.unimelb.edu.au/kapitzas/ch3") only on boab
-raw_path <-  file.path(path.expand("~"), "OneDrive - The University of Melbourne", "PhD - Large Files", "PhD - Raw Data")
-data_path <- file.path(".", "data")
+processed_path <- file.path(getwd(), "preprocessed layers")
+data_path <- file.path(getwd(), "data")
 temp_path <- file.path(data_path, "temp")
+out_path <- file.path(data_path, "output")
 int_path <- file.path(data_path, "lu_intensity")
 
 #-----------------------#
@@ -41,21 +42,31 @@ int_path <- file.path(data_path, "lu_intensity")
 #----------------------## 
 
 # 1. a Create modelling dataframe
+# this creates a data frame with the land use + intensity classes estimated from GLS data set as response and un subregion and pop density as covariates at 30 min res.
 
-# Load mask, extract non-NA indices 
+
+# Load mask, extract non-NA indices
+
 mask_30min <- raster(file.path(processed_path, "mask_30min.tif"))
 inds_30min <- which(!is.na(mask_30min[]))
 
 
-# Load 0.5 degree data for modelling into data frame
+# Load 30 min data for modelling into data frame
 files_30min <- list.files(processed_path, pattern = "30min", full.names = TRUE)
 files_30min <- grep(paste(c("predicts", "unsubregions", "base_pop"),collapse="|"), files_30min, value=TRUE)
 
+for(i in 1:length(files_30min)){
+  r <- raster(files_30min[i])
+  plot(r, main = names(r))
+}
+
 gam_data <- as.data.frame(stack(files_30min))[inds_30min,]
-landuses <- c("cropland", "pasture", "primary", "secondary", "Urban")
+
+landuses <- c("cropland", "pasture", "primary", "secondary", "urban")
 intensities <- c("minimal", "light", "intense")
-colnames(gam_data)
-# turn response columns (fractions of land use type and intensity classes) into integers for gam
+
+# turn response columns (fractions of land use type and intensity classes) into integers for GAM
+# to run GAM, the fractional data have to be in integer representaiton
 
 for(i in 1:length(landuses)){
   lu_inds <- grep(paste(paste(landuses[i], intensities, sep = "_"), collapse = "|"), colnames(gam_data))
@@ -67,7 +78,6 @@ for(i in 1:length(landuses)){
 gam_data[is.na(gam_data)] <- 0
 gam_data$unsubregions_30min[gam_data$unsubregions_30min%in%c(57, 54, 61,29,155)] <- 99
 gam_data$unsubregions_30min <- as.factor(gam_data$unsubregions_30min) # this is random effect, need to trun into factor
-
 
 # 1. b Build models
 
@@ -81,15 +91,16 @@ writeLines(c(""), logfile)
 
 results <- foreach(i = 1:5, .packages = c("mgcv")) %dopar% {
   
+  # write to logfile
   cat(paste(landuses[i],"\n"), file = logfile, append = T)
   
   lus <- landuses[i] # land use classes types
   
-  # Two different formulas, one for minimal or not, one for lihgt or intense.
+  # Two different formulas, one for minimal or not, one for light or intense, if not minimal
   f_minimal_or_not <- as.formula(paste("minimal_or_not ~", paste(c("unsubregions_30min", paste0("s(", c("base_pop_30min", lus), ")"), paste0("s(", c(lus, "base_pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
   f_light_or_intense <- as.formula(paste("light_or_intense ~", paste(c("unsubregions_30min", paste0("s(", c("base_pop_30min", lus), ")"), paste0("s(", c(lus, "base_pop_30min"), ",by = unsubregions_30min)")), collapse = "+")))
   
-  # Get columns matching land use type and intensity classes
+  # Get indices of gam_data columns matching land use type and intensity classes
   lu_inds <- grep(paste(paste(landuses[i], intensities, sep = "_"), collapse = "|"), colnames(gam_data))
   
   
@@ -102,11 +113,11 @@ results <- foreach(i = 1:5, .packages = c("mgcv")) %dopar% {
     minimal_or_not <- cbind(gam_data[,lu_inds][,1], gam_data[,lu_inds][, 2])
   }
   
-  # When we all three intensities for a lnad use type, get minimal and the sum of those that are not not minimal to model against
+  # When we have all three intensities for a lnad use type, get minimal and the sum of those that are not not minimal to model against
   if(length(lu_inds) == 3){
     minimal_or_not <- cbind(gam_data[,lu_inds][,1], rowSums(gam_data[,lu_inds][,-1]))
   }
-  
+  # run "minimal or not" GAM
   m_minimal_or_not <- tryCatch(mgcv::gam(f_minimal_or_not, family = binomial, data = gam_data), error = function(e) NA)
   if(is.na(m_minimal_or_not)) {cat(paste("returned NA - minimal or not: ",landuses[i],"\n"), file = logfile, append = T)}
   
@@ -119,6 +130,7 @@ results <- foreach(i = 1:5, .packages = c("mgcv")) %dopar% {
     # Response data matrix: all intensities except minimal
     light_or_intense <- as.matrix(gam_data[,lu_inds][,-1])
     
+    # run "light or intense" GAM
     m_light_or_intense <- tryCatch(mgcv::gam(f_light_or_intense, family = binomial, data = gam_data), error = function(e) NA)
     if(is.na(m_light_or_intense)) {cat(paste("returned NA - light or intense: ",landuses[i],"\n"), file = logfile, append = T)}
   } else {
@@ -129,8 +141,8 @@ results <- foreach(i = 1:5, .packages = c("mgcv")) %dopar% {
   list(m_minimal_or_not, m_light_or_intense, landuses[i])
 }
 
-# Save
-saveRDS(results, file.path(data_path, "lumodels_2.rds"))
+# Save models, so we can load them to predict and do validation below
+saveRDS(results, file.path(data_path, "lumodels.rds"))
 
 stopCluster(cl)
 
@@ -139,24 +151,23 @@ stopCluster(cl)
 #---------------------#
 
 # 2. a Load intensity models
-result <- readRDS(file.path(data_path, "lumodels_2.rds"))
-
+result <- readRDS(file.path(data_path, "lumodels.rds"))
 valid_df <- list()
 
 # 2. b Predict intensity for each land use type
 for(i in 1:length(landuses)){
-  
+  print(i)
   # Load models for current land use type
-  m_minimal_or_not <- result[[i]][[1]]
+  m_minimal_or_not <- result[[i]][[1]] # light or intense for pasture
   m_light_or_intense <- result[[i]][[2]]
   
   # predict first model (probability of being minimal)
-  minimal <- predict(m_minimal_or_not, type = "response", data = gam_data)
+  minimal <- predict(m_minimal_or_not, type = "response", newdata = gam_data)
   not_minimal <- 1 - minimal
   
   # predict second model (probability of being light, *if not minimal*)
   if(length(m_light_or_intense) != 1){
-    light_if_not_minimal <- predict(m_light_or_intense, type = "response", data = gam_data)
+    light_if_not_minimal <- predict(m_light_or_intense, type = "response", newdata = gam_data)
     intense_if_not_minimal <- 1 - light_if_not_minimal
     light <- light_if_not_minimal * not_minimal
     intense <- intense_if_not_minimal * not_minimal
@@ -173,140 +184,29 @@ for(i in 1:length(landuses)){
   valid_df[[i]] <- valid_out
 }
 
+
 # combine to data frame
 valid_df <- do.call("cbind", valid_df)
 
 # 2. c Map errors
 
 # Get observed data (the data set we created from gls and harmonized lu data)
-obs_df <- as.data.frame(readRDS("/Users/simon/OneDrive - The University of Melbourne/PhD/chapter3/data/lu_predicts_30min.rds"))[inds_30min,]
-obs_df - valid_df
+obs_df <- stack(list.files(processed_path, pattern = "predicts_30min", full.names = TRUE))
+obs_df <- as.data.frame(obs_df)[inds_30min,]
+
+
+files_bla <- list.files(processed_path, full.names= TRUE, pattern = "min.tif")
+for (i in 1:length(files_bla)){
+  print(length(which(!is.na(raster(files_bla[[i]])[]))))
+}
+
+dim(obs_df) == dim(valid_df)
+
 
 # Caluclate and map RMSE
 error <- as.matrix(obs_df) - as.matrix(valid_df)
 error <- sqrt(rowMeans(error^2))
 error_map <- mask_30min
+error_map[] <- NA
 error_map[inds_30min] <- error
-spplot(test)
-
-
-#-------------------------------------#
-#### 3. Prediction of fine res map ####
-#-------------------------------------#
-
-# 3. a Make prediction data frame with high res data
-
-# Load 0.5 arcmin mask and extract indices
-mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
-inds_5min <- which(!is.na(getValues(mask_5min)))
-
-# Since there are 2E10^8 data points, we have to predict the models in digestable chunks to avoid memory issues. 
-# Create chunks
-length(inds_5min)
-inds_5min_breaks <- chunk(inds_5min, n.chunks = 10)
-
-# Load fine res data
-files_5min <- list.files(processed_path, pattern = "5min", full.names = TRUE)
-files_5min <- files_5min[which(grepl(paste(c("lu", "base_pop", "unsubregions") , collapse = "|"), files_5min))]
-
-# Write very large files into the smaller chunks so we can read them in from disk step by step
-
-for(i in 1:length(files_5min)){
-  r <- raster(files_5min[[i]])
-  nm <- names(r)
-  for(j in 1:length(inds_5min_breaks)){
-    saveRDS(r[inds_5min_breaks[[j]]], file = file.path(temp_path, paste0(nm, "_chunk", j, "_nona.rds")))
-    print(paste(i, j))
-  }
-  rm(r)
-  removeTmpFiles(h = 0)
-}
-
-landuses <- c("cropland", "pasture", "primary", "secondary", "urban")
-intensities <- c("minimal", "light", "intense")
-
-# Load models
-result <- readRDS(file.path(data_path, "lumodels.rds"))
-
-# 3. b Predict, processing chunks on parallel cores
-
-# create cluster
-cl <- makeCluster(10)
-registerDoParallel(cl)
-
-logfile <- file.path(data_path, paste0("gam_log.txt"))
-writeLines(c(""), logfile)
-
-# system("ps")
-# system("pkill -f R")
-
-lu_int_names <- as.vector(t(outer(landuses, intensities, paste, sep="_")))[-c(4,14)]
-
-foreach(j = 1:length(inds_5min_breaks), .packages = c("mgcv", "foreach")) %dopar% {
-  
-  # Load covariates of current chunk into data frame
-  gam_data <- lapply(list.files(temp_path, pattern = paste0("chunk", j, "_nona.rds"), full.names = TRUE), FUN = function(x) {readRDS(x)})
-  gam_data <- as.data.frame(do.call("cbind", gam_data))
-  colnames(gam_data) <- c("base_pop_30min", "cropland", "pasture", "primary", "secondary", "unsubregions_30min", "urban")
-  chunk_inds <- inds_5min_breaks[[j]]
-  
-  gam_data$unsubregions_30min[gam_data$unsubregions_30min%in%c(57, 54, 61,29,155)] <- 99
-  gam_data$unsubregions_30min <- as.factor(gam_data$unsubregions_30min)
-  
-  # Predict the models (as in validation)
-  results <- foreach(i = 1:5, .packages = c("mgcv")) %do% {
-    
-    cat(paste("chunk", j," ", landuses[i], "\n"), file = logfile, append = T)
-    
-    # Load estimated model objects
-    m_minimal_or_not <- result[[i]][[1]]
-    m_light_or_intense <- result[[i]][[2]]
-    
-    # get predictions from first model (probability of being low)
-    minimal <- predict(m_minimal_or_not, type = "response", newdata = gam_data)
-    not_minimal <- 1 - minimal
-    
-    # and second model (probability of being medium *if not low*)
-    if(length(m_light_or_intense) != 1){
-      light_if_not_minimal <- predict(m_light_or_intense, type = "response", newdata = gam_data)
-      intense_if_not_minimal <- 1 - light_if_not_minimal
-      light <- light_if_not_minimal * not_minimal
-      intense <- intense_if_not_minimal * not_minimal
-      predicted <- cbind(minimal, light, intense)
-    } else {
-      predicted <- cbind(minimal, not_minimal)
-    }
-    
-    # Apply modelled intensity probabilities to land use type fractions
-    predicted_out <- sweep(predicted, 1, as.matrix(gam_data[landuses[i]]), FUN = "*")
-    colnames(predicted_out) <- paste0(landuses[i], "_", colnames(predicted_out))
-    predicted_out
-  }
-  predicted_out <- as.data.frame(do.call('cbind', results))
-  colnames(predicted_out) <- lu_int_names
-  
-  # Save each predicted chunk indiividually to avoid memory issues, we can load them back in and merge into map later
-  saveRDS(predicted_out, file = file.path(out_path, paste0("predicted_chunk", j, "_nona.rds")))
-}
-
-stopCluster(cl)
-
-cl <- makeCluster(7)
-registerDoParallel(cl)
-j <- i <- 1
-logfile <- file.path(data_path, paste0("log.txt"))
-writeLines(c(""), logfile)
-
-foreach(j = 1:length(lu_int_names)) %do% {
-  out <- numeric()
-  lu_int <- lu_int_names[j]
-  
-  for(i in 1:10){
-    cat(paste(paste(j, i), "\n"), file = logfile, append = T)
-    predicted_chunk <- readRDS(list.files(out_path, pattern = paste0("predicted_chunk",i, "_nona.rds"), full.names = TRUE))
-    out <- c(out, predicted_chunk[,which(colnames(predicted_chunk) == lu_int)])
-  }
-  saveRDS(out, file.path(out_path, paste0(lu_int, "_5min", ".rds")))
-}
-
-stopCluster(cl)
+spplot(error_map)

@@ -5,9 +5,10 @@
 rm(list = ls())
 require(rgdal)
 require(raster)
+require(raster)
 
 data_path <- file.path(".", "data")
-temp_path <- file.path(".", "temp")
+temp_path <- file.path("/Volumes", "external", "c3 processing", "temp")
 out_path <- file.path(".", "output")
 demand_path <- file.path(data_path, "demand calculation")
 raw_path <-  file.path("/Volumes", "external", "OneDrive - The University of Melbourne", "PhD - Large Files", "raw data")
@@ -87,18 +88,9 @@ world_borders@data <- regions_table
 
 # Rasterize
 writeOGR(world_borders, dsn = file.path(temp_path), layer = "GTAP_aggregation_borders", driver = "ESRI Shapefile", overwrite_layer = TRUE)
-output <- file.path(temp_path, "GTAP_aggregation_borders_5min.tif")
+output <- file.path(temp_path, "gtap_aggregation_5min.tif")
 input <- file.path(temp_path, "GTAP_aggregation_borders.shp")
 gdaltools::rasterize_shp(input, output, res = 0.083, c(-180, 180, -90, 90), attribute = "GTAP_code")
-
-# Mask
-gtap_aggregation <- raster::raster(output)
-gtap_aggregation <- mask(gtap_aggregation, mask_5min)
-
-
-
-# Save
-writeRaster(readAll(gtap_aggregation), file.path(processed_path, "gtap_aggregation_5min.tif"), overwrite = TRUE)
 
 #--------------------------#
 #### 2. land use demand ####
@@ -169,3 +161,44 @@ for(j in 1:length(scens)){
   saveRDS(change_by_region, file.path(out_path, paste0("demand_", scens[j], ".rds")))
 }
 
+#--------------------------------------------------------------#
+#### 3. Get demand from HURTT projections for rluh scenario ####
+#--------------------------------------------------------------#
+
+# get demand from HURTT predictions
+lu_global <- stack(list.files(processed_path, pattern = "lu_5min", full.names = TRUE, recursive = TRUE))
+lu_global <- lu_global[[-which(grepl("rcp", names(lu_global)))]]
+gtap_borders <- raster(file.path(processed_path, "gtap_aggregation_5min.tif"))
+table_gtap <- table(gtap_borders[])
+
+lu_files <- list.files("/Volumes/external/c3 processing/LUHa_u2.v1_message.v1/updated_states", full.names = TRUE)
+lu_files <- lu_files[grep(pattern = paste(c("gcrop", "gothr", "gpast", "gsecd", "gurbn"), collapse = "|"), lu_files)]
+
+lu_hurtt <-stack(lu_files[grep(pattern = "2100", lu_files)])
+cell_sums <- sum(lu_hurtt)
+lu_hurtt[which(cell_sums[] < 0.999)] <- NA
+lu_hurtt <- as.data.frame(lu_hurtt)
+
+# Estimate demand by GTAP region RCP85
+mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
+gtap_aggregation <- raster(file.path(processed_path, "gtap_aggregation_5min.tif"))
+lu <- raster(lu_files[[1]])
+crs(lu) <- crs(mask_5min)
+mask_05degree <- projectRaster(mask_5min, lu, method = "ngb")
+gtap_aggregation_05degree <- projectRaster(gtap_aggregation, mask_05degree, method = "ngb")[]
+
+lu_global_df <- as.data.frame(lu_global)
+colnames(lu_global_df) <- unlist(lapply(strsplit(colnames(lu_global_df), "_"), FUN = function(x) x[[1]]))
+
+dmds <- list()
+lus <- cbind( "gtap_borders" = gtap_borders[], lu_global_df)
+dmds[[1]] <- aggregate(.~ gtap_borders, FUN = mean, data = na.omit(lus))
+rowSums(dmds[[1]][,-1])
+
+lus2 <- cbind("gtap_borders" = gtap_aggregation_05degree, lu_hurtt)
+dmds[[2]] <- aggregate(.~ gtap_borders, FUN = mean, data = na.omit(lus2))
+colnames(dmds[[2]])[2:6] <- c("cropland", "primary", "pasture", "secondary", "urban")
+dmds[[2]] <- dmds[[2]][,match(colnames(lu_global_df), tolower(names(dmds[[2]])))]
+
+dmd_ch <- (dmds[[2]] - dmds[[1]][,-1])/8
+saveRDS(dmd_ch, file.path(out_path, "demand_rluh.rds"))

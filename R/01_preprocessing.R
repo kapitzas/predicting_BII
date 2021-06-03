@@ -367,6 +367,12 @@ names(final_lu30min) <- names
 writeRaster(final_lu30min, filename=file.path(temp_path, paste0(names, "_predicts_30min.tif")), overwrite=TRUE, bylayer =TRUE)
 
 
+#30 min LUH1 future land use for validation predictions
+lu_files <- list.files(file.path(raw_path, "Global", "LUHa_u2.v1_message.v1", "updated_states"), pattern = "2100", full.names = TRUE)
+lu_files <- stack(lu_files[grep(pattern = paste(c("gcrop", "gothr", "gpast", "gsecd", "gurbn"), collapse = "|"), lu_files)])
+names(lu_files) <- c("cropland", "primary", "pasture", "secondary", "urban")
+writeRaster(lu_files, file.path(temp_path, paste0("repr_", names(lu_files), "_lu_30min.tif")), bylayer = TRUE, format = "GTiff", overwrite = TRUE)
+
 # synch NA
 
 # 30 min
@@ -401,7 +407,7 @@ for(i in 1:length(files_5min)){
   unlink(tempfiles[-which(grepl(substr(mask_5min@file@name, 100, nchar(mask_5min@file@name)-4), tempfiles))])
   print(i)
 }
-plot(mask_5min)
+
 writeRaster(readAll(mask_5min), file.path(processed_path, "mask_5min.tif"), format = "GTiff", overwrite = TRUE)
 
 mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))

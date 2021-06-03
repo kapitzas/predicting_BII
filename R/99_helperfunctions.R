@@ -69,3 +69,11 @@ getJacAbSym <- function(s1, s2, data){
   return(sor)
   
 }
+
+multi_pdf <- function(x, paths, height, width){
+  for(i in 1:length(paths)){
+  pdf(paths[i], height = height, width = width)
+    print(x)
+    dev.off()
+  }
+}
