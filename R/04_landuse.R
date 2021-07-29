@@ -35,12 +35,13 @@ table_gtap <- table(gtap_borders[])
 
 # 1. b load land use and present and future environmental variables
 lu_global <- stack(list.files(processed_path, pattern = "lu_5min", full.names = TRUE, recursive = TRUE))
-covs_global <- stack(list.files(processed_path, pattern = "5min", full.names = TRUE, recursive = TRUE))
-
+lu_global <- lu_global[[which(grepl(pattern = paste0(c("^urb", "^crop", "^pas", "^pri", "^sec"), collapse = "|"), names(lu_global)))]]
+covs_files <- list.files(processed_path, pattern = "5min", full.names = TRUE, recursive = TRUE)
+covs_global <- stack(covs_files[which(!grepl(pattern = paste0(c("urb", "crop", "pas", "pri", "sec"), collapse = "|"), covs_files))])
 # 1. c Calculate time step increments in covariates that change in the future (bioclim and pop density)
 
 # subset the present time steps
-covs_pres <- covs_global[[-which(grepl("rcp|ssp", names(covs_global)))]]
+covs_pres <- covs_global[[-which(grepl("rcp|ssp|biorealms", names(covs_global)))]]
 covs_pres <- covs_pres[[which(grepl("bio|pop", names(covs_pres)))]]
 
 # subset future time steps (bio under rcp45 and rcp85 and pop under ssp2 and ssp5)
@@ -49,13 +50,13 @@ covs_fut85 <- covs_global[[which(grepl("rcp85|ssp5", names(covs_global)))]]
 covs_fut85 <- covs_fut85[[c(which(grepl("pop", names(covs_fut85))), which(grepl("bio", names(covs_fut85))))]] # reod
 covs_fut45 <- covs_fut45[[c(which(grepl("pop", names(covs_fut45))), which(grepl("bio", names(covs_fut45))))]]
 
-
 # calculate increments in the changing time steps (2020-2100 means we have 8 10-year time steps)
 cov_fut_increment_45 <- (covs_fut45 - covs_pres)/8
 cov_fut_increment_85 <- (covs_fut85 - covs_pres)/8
 names(cov_fut_increment_85) <- names(cov_fut_increment_45) <- names(covs_pres)
 
-covs_incr <- c(cov_fut_increment_45, cov_fut_increment_85, cov_fut_increment_85) #2x 85, bc validation scenario is also 85
+covs_incr <- c(cov_fut_increment_45, cov_fut_increment_85, cov_fut_increment_85) #2x 85, bc validation scenario (LUH1 demand) is also 85
+
 # 1.d load mask
 mask <- covs_global[[grep(paste(c("mask"), collapse = "|"), names(covs_global))]]
 
@@ -72,7 +73,7 @@ neigh_global <- neighbourhood(lu_global, weights = weights, mask = mask, suffix 
 #### 2. Suitability model ####
 #----------------------------#
 # 2. a subset covs to include the ones we need in suitability model
-covs_suitmodel <- covs_global[[-grep(paste(c("rcp45", "rcp85", "lu", "ssp", "gtap", "unsubregions", "gls", "pa", "mask"), collapse = "|"), names(covs_global))]]
+covs_suitmodel <- covs_global[[-grep(paste(c("biorealms", "rcp45", "rcp85", "lu", "ssp", "gtap", "unsubregions", "gls", "pa", "mask"), collapse = "|"), names(covs_global))]]
 
 # 2. b get protected areas
 pa_global <- covs_global[[grep(paste(c("pa_"), collapse = "|"), names(covs_global))]]
@@ -84,46 +85,48 @@ pa_global <- covs_global[[grep(paste(c("pa_"), collapse = "|"), names(covs_globa
 country_code <- read.csv(file.path(data_path, "GTAP_regions.csv"))
 
 country_code <- distinct(country_code[,c(3,4)])
-# 
-# # iterate through regions
-# suitmodels <- list()
-# for(i in 1:30){
-#   print(i)
-#   # current region name and code
-#   regions <- country_code$GTAP_aggregation[i]
-#   map_code <- country_code$GTAP_code[i]
-#   
-#   # get regional data from global data set:
-#   # indices of current region
-#   inds <- which(gtap_borders[]==map_code)
-#   
-#   # land use data
-#   landuse <- lu_global[inds]
-#   colnames(landuse) <- unlist(lapply(strsplit(colnames(landuse), "_"), FUN = function(x) x[[1]]))
-#   
-#   # env covariates
-#   covs <- covs_suitmodel[inds]
-#   neigh <- neigh_global[inds]
-#   data <- cbind(covs, neigh)
-#   
-#   ssize <- 10000
-#   if(nrow(covs) < ssize) ssize <- nrow(covs)
-#   
-#   # Determine correlations in data and reduce predictor set
-#   preds <- colnames(correlations(data, sub = sample(1:nrow(covs), ssize)))
-#   data <- data[,preds]
-#   
-#   # Run Suitability model
-#   suitmodels[[i]] <- suitmodel(form = paste(colnames(data), collapse = "+"),
-#                                lu = landuse,
-#                                data = data,
-#                                sub = sample(1:nrow(covs), ssize),
-#                                resolution = 10000,
-#                                maxit = 1000)
-# }
-# 
-# saveRDS(suitmodels, file.path(out_path, "suitmodels.rds"))
 
+# iterate through regions
+suitmodels <- list()
+i <- 1
+for(i in 1:30){
+  print(i)
+  # current region name and code
+  regions <- country_code$GTAP_aggregation[i]
+  map_code <- country_code$GTAP_code[i]
+
+  # get regional data from global data set:
+  # indices of current region
+  inds <- which(gtap_borders[]==map_code)
+
+  # land use data
+  landuse <- lu_global[inds]
+  colnames(landuse) <- unlist(lapply(strsplit(colnames(landuse), "_"), FUN = function(x) x[[1]]))
+
+  # env covariates
+  covs <- covs_suitmodel[inds]
+  neigh <- neigh_global[inds]
+  data <- cbind(covs, neigh)
+
+  ssize <- 10000
+  if(nrow(covs) < ssize) ssize <- nrow(covs)
+
+  # Determine correlations in data and reduce predictor set
+  preds <- colnames(correlations(data, sub = sample(1:nrow(covs), ssize)))
+  data <- data[,preds]
+
+  # Run Suitability model
+  suitmodels[[i]] <- suitmodel(form = paste(colnames(data), collapse = "+"),
+                               lu = landuse,
+                               data = data,
+                               sub = sample(1:nrow(covs), ssize),
+                               resolution = 10000,
+                               maxit = 1000,
+                               model = TRUE)
+}
+suitmodels[[1]]$terms
+
+str(suitmodels[[1]])
 #-------------------------------#
 #### 3. Land use allocations ####
 #-------------------------------#
@@ -131,7 +134,7 @@ country_code <- distinct(country_code[,c(3,4)])
 # 3. a prepare data and initialise variables
 suitmodels <- readRDS(file.path(out_path, "suitmodels.rds"))
 
-# we have three scenarios: rcp45 (SSP2 baseline), rcp85 (SSP5 baseline) and dluh
+# we have three scenarios we need to run land use simulations for: rcp45 (SSP2 baseline), rcp85 (SSP5 baseline) and dluh
 # rcp45: this is mapped to SSP2
 # rcp85: this is mapped to SSP5
 # dluh: scenario that uses the LUH1 demands
@@ -143,7 +146,7 @@ scens <- c("rcp45", "rcp85",  "dluh")
 lu_names <- c("cropland", "pasture", "primary", "secondary", "urban")
 
 # get demands calculated from GTAP INT predictions
-d1 <- readRDS(file.path(out_path, "demand_RCP60.rds"))
+d1 <- readRDS(file.path(out_path, "demand_RCP45.rds"))
 d2 <- readRDS(file.path(out_path, "demand_RCP85.rds"))
 d1 <- d1[,match(country_code$GTAP_aggregation, colnames(d1))]
 d2 <- d2[,match(country_code$GTAP_aggregation, colnames(d2))]

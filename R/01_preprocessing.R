@@ -234,6 +234,28 @@ for (i in 1:length(q2_list)){
   outfile <- file.path(temp_path,  paste0(names[i], "_5min.tif"))
   reproj_ras(infile, outfile, crs = crs(mask_5min), ext = extent(mask_5min), res = res(mask_5min), method = "bilinear")
 }
+require(sf)
+
+# ecoregions rasters
+ecoregs <- read_sf(file.path(raw_path, "Global", "Terrestrial_Ecoregions_World", "Terrestrial_Ecoregions_World.shp"))
+ecoregs$REALM <- as.factor(ecoregs$REALM)
+ecoreglevels <- cbind(levels(ecoregs$REALM), 1:8)
+ecoregs$REALM <- as.numeric(ecoregs$REALM)
+
+write.csv(ecoreglevels, file.path(out_path, "ecoreglevels.csv"))
+write_sf(ecoregs, file.path(raw_path, "Global", "Terrestrial_Ecoregions_World", "Terrestrial_Ecoregions_World_numeric.shp"))
+
+
+input <- file.path(raw_path, "Global", "Terrestrial_Ecoregions_World", "Terrestrial_Ecoregions_World_numeric.shp")
+mask_30min <- raster(file.path(processed_path, "mask_30min.tif"))
+mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
+
+output <- file.path(processed_path, "biorealms_30min.tif")
+rasterize_shp(input, output, res = res(mask_30min), ext = extent(mask_30min), attribute = "REALM", no_data = NA)
+
+output <- file.path(processed_path, "biorealms_5min.tif")
+rasterize_shp(input, output, res = res(mask_5min), ext = extent(mask_5min), attribute = "REALM", no_data = NA)
+
 
 #-------------------------------#
 #### 3. Prepare land use data####
@@ -269,8 +291,7 @@ writeRaster(readAll(gls_layers), filename=file.path(temp_path, "gls_30min.tif"),
 # load data
 harmonized <- list.files(file.path(raw_path, "Global", "harmonised land use downscaled"), pattern = ".bil", recursive = TRUE, full.name = TRUE)
 
-# Get rid of ice class (no existe en Aus)
-
+# Get rid of ice class
 # harmonized <- harmonized[-which(grepl("ICE", harmonized))]
 lu_names <- c("cropland", "pasture", "primary", "secondary", "urban")
 
@@ -299,11 +320,11 @@ conversion_table$urban <- c(rep(NA, 28), "minimal", "intense")
 
 write.csv(conversion_table, file = file.path("data", "gls_conversion_table.csv"))
 
+# Get gls classes per land use type and intensity class
 glc_har_restr <- list()
 intensities <- c("minimal", "light", "intense")
 landuses <- colnames(conversion_table)[-1]
 
-# Get gls classes per land use type and intensity class
 for (i in 1:5){
   har_restr <- list() 
   for (j in 1:3){
@@ -318,7 +339,7 @@ names(glc_har_restr) <- landuses
 gls_layers <- stack("/Volumes/external/c3 processing/temp/gls_30min.tif")
 names(gls_layers) <- gls_classes
 
-# Sum gls classes per assigned land use and intensity level to find the fraction occupied by different intensities within each type
+# Sum gls classes by assigned land use and intensity level to find the fraction occupied by different intensities within each type
 
 nl2 <- list()
 i <- j <- 1
@@ -366,14 +387,13 @@ names(final_lu30min) <- names
 
 writeRaster(final_lu30min, filename=file.path(temp_path, paste0(names, "_predicts_30min.tif")), overwrite=TRUE, bylayer =TRUE)
 
-
-#30 min LUH1 future land use for validation predictions
+# 3. d Preprocess 30 min LUH1 future land use for predictions of M8.5 and M8.5 demand scenarios
 lu_files <- list.files(file.path(raw_path, "Global", "LUHa_u2.v1_message.v1", "updated_states"), pattern = "2100", full.names = TRUE)
 lu_files <- stack(lu_files[grep(pattern = paste(c("gcrop", "gothr", "gpast", "gsecd", "gurbn"), collapse = "|"), lu_files)])
 names(lu_files) <- c("cropland", "primary", "pasture", "secondary", "urban")
 writeRaster(lu_files, file.path(temp_path, paste0("repr_", names(lu_files), "_lu_30min.tif")), bylayer = TRUE, format = "GTiff", overwrite = TRUE)
 
-# synch NA
+# 3. e synch NA
 
 # 30 min
 mask_30min <- raster(file.path(temp_path, "mask_30min.tif"))
@@ -424,19 +444,29 @@ for(i in 1:length(files_5min)){
   writeRaster(r, file.path(processed_path, names_5min[i]), format = "GTiff", overwrite = TRUE)
 }
 
-# 1. e extract how many cells changed from 0 to containing a land use (this is the data in Table 4)
+#-----------------------------------------------------------------#
+#### 4. parametrize constraint (new establishment of land use) ####
+#-----------------------------------------------------------------#
+
+# extract how many cells changed from 0 to containing a land use between observed time steps
+
+# load land use data
 lu_files <- list.files(file.path(raw_path, "Global", "LUHa_u2t1.v1"), recursive = TRUE, full.names = TRUE)
 lu_files <- lu_files[grep(pattern = paste(1990:2005, collapse = "|"), lu_files)]
 lu_files <- lu_files[grep(pattern = paste(c("gcrop", "gothr", "gpast", "gsecd", "gurbn"), collapse = "|"), lu_files)]
 lu <- raster(lu_files[[1]])
+
 gtap_aggregation <- raster(file.path(processed_path, "gtap_aggregation_5min.tif"))
 crs(lu) <- crs(mask_5min)
 mask_05degree <- projectRaster(mask_5min, lu, method = "ngb")
 gtap_aggregation_05degree <- projectRaster(gtap_aggregation, mask_05degree, method = "ngb")
 yrs <- 1990:2005
+
+# extract data for each of the 30 GTAP regions
 gtap_regions <- read.csv(file.path(data_path, "GTAP_regions.csv"))
 gtap_regions <- distinct(gtap_regions[,c(3,4)])
 lu_obs_yr <- list()
+
 for(i in 1:length(yrs)){
   print(i)
   lu <- stack(lu_files[grep(pattern = yrs[i], lu_files)])
@@ -448,7 +478,7 @@ for(i in 1:length(yrs)){
   }
   lu_obs_yr[[i]] <- lu_obs
 }
-i <- j <- 1
+
 lu_obs_final <- list()
 for(j in 1:30){
   lu_obs <- list()
@@ -458,7 +488,6 @@ for(j in 1:30){
   lu_obs_final[[j]] <- lu_obs
 }
 
-# lu_obs_yr: each element contains a list which in 
 ch_matrices <- list()
 for(j in 1:length(lu_obs_final)){
   
@@ -474,9 +503,11 @@ for(j in 1:length(lu_obs_final)){
   ch_matrices[[j]] <- ch_ma
   }
 }
+
 l <- do.call("rbind", lapply(ch_matrices, FUN = function(x) colMeans(x)))
 l <- cbind(gtap_regions$GTAP_code, l)
 colnames(l) <- c("GTAP_code", "cropland", "pasture", "primary", "secondary","urban")
 
 saveRDS(l, file = file.path("output", "lu_newestablishment.rds"))
+write.csv(csv, "/Users/simon/ownCloud/PhD/writing/thesis/tables/lu_newestablishment.csv")
 

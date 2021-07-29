@@ -76,13 +76,12 @@ diversity <- diversity %>%  mutate(
 )
 
 table(diversity$LandUse, diversity$Predominant_land_use)
-any(is.na(diversity$LandUse))
 
-#----------------------------#
-#### 2. Calculate indices ####
-#----------------------------#
+#---------------------------------------------#
+#### 2. Calculate abundance and similarity ####
+#---------------------------------------------#
 
-# code from Adriana 
+# code adopted from https://adrianadepalma.github.io/BII_tutorial/bii_example.html
 
 # 2. a Total abundance
 abundance_data <- diversity %>%
@@ -113,9 +112,6 @@ abundance_data <- diversity %>%
   
   # now rescale total abundance, so that within each study, abundance varies from 0 to 1.
   mutate(RescaledAbundance = TotalAbundance/MaxAbundance)
-
-
-str(abundance_data)
 
 
 # 2. b Compositional Similarity (asymmetric Jaccard Index)
@@ -155,7 +151,6 @@ cd_data_input <- diversity %>%
   droplevels()
 
 
-
 # Calcuate dissimilarity in parallel
 
 studies <- distinct(cd_data_input, SS) %>%
@@ -166,138 +161,140 @@ registerDoParallel(cores = 2)
 logfile <- file.path("dissimilarity_log.txt")
 writeLines(c(""), logfile)
 
-cd_data <- foreach(s = studies, 
+cd_data <- foreach(s = studies,
                    .combine = rbind,
                    .packages = c("dplyr", "magrittr", "geosphere")) %dopar% {
                      cat(paste(which(studies%in%s), "/", length(studies), "\n"), file = logfile, append = T)
-                     
+
                      # filter out the given study
                      data_ss <- filter(cd_data_input, SS == s)
-                     
+
                      # pull out the SSBS and LandUse information (we'll use this later to assign a land use contrast to each pair of site
                      site_data <- data_ss %>%
                        dplyr::select(SSBS, LandUse) %>%
                        distinct(SSBS, .keep_all = TRUE)
-                     
+
                      # pull out the sites that are Primary minimal (we only want to use comparisons with the baseline)
                      baseline_sites <- site_data %>%
                        filter(LandUse == "Primary minimal") %>%
                        pull(SSBS)
-                     
+
                      # pull out all the sites
                      site_list <- site_data %>%
                        pull(SSBS)
-                     
-                     
+
+
                      # get all site x site comparisons for this study
                      site_comparisons <- expand.grid(baseline_sites, site_list) %>%
-                       
+
                        # rename the columns so they will be what the compositional similarity function expects for ease
                        rename(s1 = Var1, s2 = Var2) %>%
-                       
+
                        # remove the comparisons where the same site is being compared to itself
                        filter(s1 != s2)
-                     
-                     
+
+
                      # apply the compositional similarity function over each site combination in the dataset
                      sor <- apply(site_comparisons, 1, function(y) getJacAbSym(data = data_ss, s1 = y['s1'], s2 = y['s2']))
-                     
+
                      # calculate the geographic distance between sites
                      # first pull out the lat and longs for each site combination
                      s1LatLong <- as.matrix(data_ss[match(site_comparisons$s1, data_ss$SSBS), c('Longitude','Latitude')])
                      s2LatLong <- as.matrix(data_ss[match(site_comparisons$s2, data_ss$SSBS), c('Longitude','Latitude')])
-                     
+
                      # then calculate the distance between sites
                      dist <- distHaversine(s1LatLong, s2LatLong)
-                     
+
                      # pull out the land-use contrast for those site combinations
                      Contrast <- paste(site_data$LandUse[match(site_comparisons$s1, site_data$SSBS)],
-                                       site_data$LandUse[match(site_comparisons$s2, site_data$SSBS)], 
+                                       site_data$LandUse[match(site_comparisons$s2, site_data$SSBS)],
                                        sep = "-")
-                     
+
                      # put all the information into a single dataframe
-                     
+
                      study_results <- data.frame(site_comparisons,
                                                  sor,
                                                  dist,
                                                  Contrast,
                                                  SS = s,
                                                  stringsAsFactors = TRUE)
-                     
-                     
-                     
+
+
+
                    }
 
-# stop running things in parallel
 registerDoSEQ()
 
-#
-
 cd_data <- cd_data %>%
-  
+
   # Firstly, we only care about comparisons where Primary minimal is the first site
   # so pull the contrast apart
   separate(Contrast, c("s1_LandUse", "s2_LandUse"), sep = "-", remove = FALSE) %>%
-  
+
   # filter sites where s1_LandUse is the baseline site
   filter(s1_LandUse == "Primary minimal") %>%
-  
+
   # logit transform the compositional similarity
   mutate(logitCS = logit(sor, adjust = 0.001, percents = FALSE)) %>%
-  
+
   # log10 transform the geographic distance between sites
   mutate(log10geo = log10(dist + 1)) %>%
-  
+
   # make primary minimal-primary minimal the baseline again
-  mutate(Contrast = factor(Contrast), 
+  mutate(Contrast = factor(Contrast),
          Contrast = relevel(Contrast, ref = "Primary minimal-Primary minimal"))
 
-# saveRDS(cd_data, file.path("output", "cd_data.rds"))
+saveRDS(cd_data, file.path("output", "cd_data.rds"))
 
-cd_data <- readRDS(file.path("output", "cd_data.rds"))
+cd_data <- readRDS(file.path(out_path, "cd_data.rds"))
 
-# Model compositional similarity as a function of the land-use contrast and the geographic distance between sites
+#-----------------------#
+#### 3. Build models ####
+#-----------------------#
+
+# 3.a Model compositional similarity as a function of the land-use contrast and the geographic distance between sites
+
 cd_m <- lmer(logitCS ~ Contrast + log10geo + (1|SS), data = cd_data)
 
-summary(cd_m)
+saveRDS(cd_m, file.path(out_path, "cd_model.rds"))
 
+# 3. b Model abundance as a function of the land-use level
 ab_m <- lmer(sqrt(RescaledAbundance) ~ LandUse + (1|SS), data = abundance_data)
 
-# Check singularity
-tt <- getME(ab_m,"theta")
-ll <- getME(ab_m,"lower")
-min(tt[ll==0])
+saveRDS(ab_m, file.path(out_path, "ab_model.rds"))
 
-# Prediciting models
-# let's start with the abundance model
 
-# set up a dataframe with all the levels you want to predict diversity for
-# so all the land-use classes in your model must be in here
+#-------------------------#
+#### 4. Predict models ####
+#-------------------------#
+
+# 4.a predict abundance
+# set up data frame with lan-use levels
 newdata_ab <- data.frame(LandUse = levels(abundance_data$LandUse)) %>%
   
-  # now calculate the predicted diversity for each of these land-use levels
-  # setting re.form = NA means random effect variance is ignored
-  # then square the predictions (because we modelled the square root of abundance, so we have to back-transform it to get the real predicted values)
   mutate(ab_m_preds = predict(ab_m, ., re.form = NA) ^ 2)
 
-
-# now the compositional similarity model
-
-# set up a function to calculate the inverse logit of the adjusted logit function we used
-# where f is the value to be back-transformed and a is the adjustment value used for the transformation
-inv_logit <- function(f, a){
-  a <- (1-2*a)
-  (a*(1+exp(f))+(exp(f)-1))/(2*a*(1+exp(f)))
-}
-
-# once again, set up the dataframe with all the levels you want to predict diversity for
-# we'll set it to 0 because we're interested in the compositional similarity when distance between sites is 0 (i.e., when distance-based turnover is discounted, what is the turnover because of land use?)
+# 4. b predict compositional similarity
+# set up data frame with land-use contrasts
 newdata_cd <- data.frame(Contrast = levels(cd_data$Contrast),
                          log10geo = 0) %>%
   mutate(cd_m_preds = predict(cd_m, ., re.form = NA) %>%
            inv_logit(a = 0.001))
 
-# Predict globally at 5min res
+# 4.c Calculate mean comp similarity and abundance for each class/contrast (for figure)
+dat <- 
+  newdata_cd %>% 
+  mutate(Contrast = stringr::str_remove(pattern = "Primary minimal-", string = Contrast)) %>% 
+  left_join(newdata_ab, by = c("Contrast" = "LandUse")) %>% 
+  select(-log10geo) %>% 
+  column_to_rownames('Contrast') %>% 
+  apply(2, function(x) {x[-1]/x[1]}) %>% 
+  data.frame %>% 
+  mutate("BII" = cd_m_preds * ab_m_preds)
+
+write.csv(dat, file = file.path(out_path, "cd_ab_BII.csv"))
+
+# 4.d Predict globally at 5min res
 mask_5min <- raster(file.path(processed_path, "mask_5min.tif"))
 inds_sub_5min <- which(!is.na(mask_5min[]))
 mask_30min <- raster(file.path(processed_path, "mask_30min.tif"))
@@ -307,8 +304,6 @@ unsub_5min <- raster(list.files(processed_path, pattern = "unsubregions_5min", f
 unsub_30min <- raster(list.files(processed_path, pattern = "unsubregions_30min", full.names = TRUE))
 
 scens <- c("pres", "rcp45", "rcp85", "dluh", "repr")
-k <- 5
-
 for (k in 1:length(scens)){
   
   if(k%in%c(1:4)){
@@ -326,8 +321,6 @@ for (k in 1:length(scens)){
   lus <- as.data.frame(stack(files_predict))[inds_sub,]
   colnames(lus) <- colnames(lus) %>% str_replace("_5min", "") %>% str_replace("pres_", "")
   
-  
-  # for each column of lus (i.e., each land use)
   ras_list <- list()
   i <- 1
   for(i in 1:ncol(lus)){
@@ -339,7 +332,6 @@ for (k in 1:length(scens)){
   ras <- stack(ras_list)
   names(ras) <- colnames(lus)
   newdata_ab <- newdata_ab[order(newdata_ab$LandUse),]
-  cbind(names(ras), newdata_ab)
   
   ab_raster <- ras[[1]]
   ab_raster[inds_sub] <- 0
@@ -369,18 +361,3 @@ for (k in 1:length(scens)){
   writeRaster(ab_raster, filename = file.path(out_path, paste0("ab_", scens[k], ".tif")), format = "GTiff", overwrite = TRUE)
   print(scens[k])
 }
-
-bii_pres <- raster(file.path(out_path, paste0("bii_pres.tif")))
-bii_45 <- raster(file.path(out_path, paste0("bii_rcp45.tif")))
-bii_85 <- raster(file.path(out_path, paste0("bii_rcp85.tif")))
-
-diff <- bii_85 - bii_pres
-rasterVis::levelplot(diff, margin = FALSE)
-mean(diff[], na.rm = TRUE)
-
-t <- 8
-c1 <- raster(files_5min[[1+t]])
-c2 <- raster(files_5min[[27+t]])
-levelplot(c2)
-
-

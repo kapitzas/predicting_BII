@@ -77,3 +77,21 @@ multi_pdf <- function(x, paths, height, width){
     dev.off()
   }
 }
+
+
+# https://groups.google.com/forum/#!topic/ggplot2/1TgH-kG5XMA
+lm_eqn <- function(df){
+  m <- lm(y ~ x, df);
+  eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+                   list(a = format(unname(coef(m)[1]), digits = 2),
+                        b = format(unname(coef(m)[2]), digits = 2),
+                        r2 = format(summary(m)$r.squared, digits = 3)))
+  as.character(as.expression(eq));
+}
+
+# set up a function to calculate the inverse logit of the adjusted logit function we used
+# where f is the value to be back-transformed and a is the adjustment value used for the transformation
+inv_logit <- function(f, a){
+  a <- (1-2*a)
+  (a*(1+exp(f))+(exp(f)-1))/(2*a*(1+exp(f)))
+}

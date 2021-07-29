@@ -117,17 +117,15 @@ crops_by_region$GTAP_country <- areas$GTAP_aggregation[match(crops_by_region$GTA
 write.csv(crops_by_region, file.path(demand_path, "GTAP_harvestedbyregion.csv"), row.names = TRUE)
 
 
-scens <- c("RCP60", "RCP85")
+scens <- c("RCP45", "RCP85")
 # Estimate demand trajectory 
 
 for(j in 1:length(scens)){
   crops_by_region <- read.csv(file.path(demand_path, "GTAP_harvestedbyregion.csv"))
   
-  gtap_traj <- read.csv(file.path(demand_path, "GTAP trajectories", paste0("qfe_", scens[j], "_2070.csv")))
+  gtap_traj <- read.csv(file.path(demand_path, "GTAP trajectories", paste0("qfe_", scens[j], "_2100.csv")))
   gtap_traj <- gtap_traj[c(which(gtap_traj$qfe%in%unique(crops_by_region$GTAP)),9), ]
   gtap_regions <- unique(crops_by_region$GTAP_country)
-  
-  crops_by_region[which(crops_by_region$GTAP_country%in%gtap_regions[i]),]
   
   # cropland and pasture
   colnames(crops_by_region)
@@ -161,9 +159,9 @@ for(j in 1:length(scens)){
   saveRDS(change_by_region, file.path(out_path, paste0("demand_", scens[j], ".rds")))
 }
 
-#--------------------------------------------------------------#
-#### 3. Get demand from HURTT projections for rluh scenario ####
-#--------------------------------------------------------------#
+#---------------------------------------------------------------------#
+#### 3. Get demand from HURTT projections for M8.5 demand scenario ####
+#---------------------------------------------------------------------#
 
 # get demand from HURTT predictions
 lu_global <- stack(list.files(processed_path, pattern = "lu_5min", full.names = TRUE, recursive = TRUE))
